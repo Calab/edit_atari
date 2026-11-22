@@ -10,10 +10,9 @@ pub struct Decoded {
     pub lines: Vec<Vec<u8>>,
     /// Whether the last line was followed by a terminator.
     pub final_eol: bool,
-    /// Set when the file was not in the machine's native format and was
-    /// converted (e.g. a PC text file with LF line endings). The string is a
-    /// short human-readable description for the status bar.
-    pub converted_from: Option<&'static str>,
+    /// Set when the file was converted from PC text (File > Import). The
+    /// string is a short human-readable description for the status bar.
+    pub converted_from: Option<String>,
 }
 
 pub trait Machine {
@@ -79,6 +78,48 @@ pub trait Machine {
             n @ 0xE000..=0xE0FF => Some((n - 0xE000) as u8),
             _ => None,
         }
+    }
+
+    /// A line as UTF-8 for export: each code as [`Machine::char_for_code`],
+    /// as on the clipboard.
+    fn export_unicode(&self, line: &[u8]) -> String {
+        line.iter().map(|&c| self.char_for_code(c)).collect()
+    }
+
+    /// A line as plain ASCII for export. Default: printable ASCII as
+    /// itself, other codes as `{$xx}`.
+    fn export_ascii(&self, line: &[u8]) -> String {
+        line.iter()
+            .map(|&c| match c {
+                0x20..=0x7E => (c as char).to_string(),
+                _ => format!("{{${c:02X}}}"),
+            })
+            .collect()
+    }
+
+    /// Import a PC text file. Default: lines split at LF, CR+LF or CR,
+    /// characters as [`Machine::code_for_char`], `?` for the rest.
+    fn import_text(&self, bytes: &[u8]) -> Decoded {
+        let text = String::from_utf8_lossy(bytes);
+        let lines = text
+            .lines()
+            .map(|l| {
+                l.chars()
+                    .map(|c| self.code_for_char(c).unwrap_or(b'?'))
+                    .collect()
+            })
+            .collect();
+        Decoded {
+            lines,
+            final_eol: true,
+            converted_from: Some("PC text".into()),
+        }
+    }
+
+    /// Whether a file looks like PC text that should be imported rather
+    /// than opened.
+    fn looks_like_pc_text(&self, _bytes: &[u8]) -> bool {
+        false
     }
 
     /// The file formats the machine reads, most specific first. The last

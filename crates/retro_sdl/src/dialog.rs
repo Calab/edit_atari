@@ -17,6 +17,7 @@ use crate::ui_font::UiFont;
 pub enum After {
     New,
     Open,
+    Import,
     Quit,
 }
 
@@ -33,6 +34,8 @@ pub enum Purpose {
     /// Choose the format to save in; the buttons are the formats' names,
     /// then Cancel.
     SaveAsFormat,
+    /// Export as text: 0 = Unicode, 1 = ASCII, 2 = Cancel.
+    Export,
 }
 
 pub struct Dialog {
@@ -127,6 +130,28 @@ impl Dialog {
             buttons,
             focus: 0,
             cancel,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Unicode (Atari font), 1 = ASCII with {tags}, 2 = Cancel.
+    pub fn export(file_name: &str) -> Self {
+        Self {
+            purpose: Purpose::Export,
+            title: "Export".into(),
+            text: format!(
+                "Export {file_name} as PC text:\n\
+                 \n\
+                 Unicode: UTF-8, the Atari characters shown with\n\
+                 the EightBit Atari font.\n\
+                 ASCII: plain text, other characters as {{tags}}\n\
+                 such as {{CLEAR}}, {{CTRL-A}} and {{INV}}...{{/INV}}.\n\
+                 \n\
+                 File > Import reads either kind back."
+            ),
+            buttons: vec!["Unicode", "ASCII", "Cancel"],
+            focus: 0,
+            cancel: 2,
             button_rects: Vec::new(),
         }
     }

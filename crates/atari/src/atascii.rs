@@ -74,8 +74,8 @@ pub fn international_char(code: u8) -> Option<char> {
         .map(|&(_, ch)| ch)
 }
 
-/// Decode an ATASCII file. A file with no EOL bytes but with LF/CR line
-/// endings is treated as a PC text file and converted.
+/// Decode an ATASCII file, byte for byte: every file is Atari bytes here,
+/// whatever its line endings. PC text is read by [`import`].
 pub fn decode(bytes: &[u8]) -> Decoded {
     if bytes.is_empty() {
         // One empty line with no EOL, so it saves back as an empty file.
@@ -84,9 +84,6 @@ pub fn decode(bytes: &[u8]) -> Decoded {
             final_eol: false,
             converted_from: None,
         };
-    }
-    if !bytes.contains(&EOL) && bytes.iter().any(|&b| b == b'\n' || b == b'\r') {
-        return decode_pc_text(bytes);
     }
     let final_eol = bytes.last() == Some(&EOL);
     let body = if final_eol {
@@ -102,32 +99,58 @@ pub fn decode(bytes: &[u8]) -> Decoded {
     }
 }
 
-/// Split on LF, CRLF or lone CR.
-fn decode_pc_text(bytes: &[u8]) -> Decoded {
+/// Whether a file looks like PC text rather than ATASCII: line breaks and
+/// no EOLs.
+pub fn looks_like_pc_text(bytes: &[u8]) -> bool {
+    !bytes.contains(&EOL) && bytes.iter().any(|&b| b == b'\n' || b == b'\r')
+}
+
+/// Import a PC text file (File > Import): lines split at LF, CR+LF or CR,
+/// and each line converted by [`crate::pctext::from_text`].
+pub fn import(bytes: &[u8]) -> Decoded {
+    // UTF-8 (with or without a byte-order mark) is read as characters.
+    // Anything else keeps its bytes: a byte above $7F is passed through as
+    // the Private Use character for that code, so it reads back as itself.
+    let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let (text, from) = match std::str::from_utf8(body) {
+        Ok(s) if !s.is_ascii() => (s.to_string(), "UTF-8 text"),
+        Ok(s) => (s.to_string(), "PC text"),
+        Err(_) => (
+            body.iter()
+                .map(|&b| match b {
+                    0x00..=0x7F => b as char,
+                    _ => char::from_u32(0xE000 + b as u32).unwrap(),
+                })
+                .collect(),
+            "PC text",
+        ),
+    };
     let mut lines = Vec::new();
-    let mut cur = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\r' => {
-                lines.push(std::mem::take(&mut cur));
-                if bytes.get(i + 1) == Some(&b'\n') {
-                    i += 1;
-                }
+    let mut unknown = 0;
+    let mut rest = text.as_str();
+    while !rest.is_empty() {
+        let (line, next) = match rest.find(['\r', '\n']) {
+            Some(n) => {
+                let skip = if rest[n..].starts_with("\r\n") { 2 } else { 1 };
+                (&rest[..n], &rest[n + skip..])
             }
-            b'\n' => lines.push(std::mem::take(&mut cur)),
-            b => cur.push(b),
-        }
-        i += 1;
+            None => (rest, ""),
+        };
+        let (codes, bad) = crate::pctext::from_text(line);
+        lines.push(codes);
+        unknown += bad;
+        rest = next;
     }
-    if !cur.is_empty() {
-        lines.push(cur);
+    let mut from = from.to_string();
+    if unknown > 0 {
+        let s = if unknown == 1 { "" } else { "s" };
+        from += &format!(" ({unknown} character{s} with no Atari equivalent, shown as ?)");
     }
     // Converted files are always written back with a final EOL.
     Decoded {
         lines,
         final_eol: true,
-        converted_from: Some("PC text"),
+        converted_from: Some(from),
     }
 }
 
@@ -145,7 +168,7 @@ pub fn encode(lines: &[Vec<u8>], final_eol: bool) -> Vec<u8> {
 }
 
 /// ATASCII text with $9B line ends: LIST files, assembler source and so
-/// on. Accepts any file (PC text is converted), so it goes last in the
+/// on. Accepts any file, so it goes last in the
 /// machine's format list.
 pub struct AtasciiText;
 
@@ -214,9 +237,26 @@ mod tests {
     }
 
     #[test]
+    fn converts_utf8_and_tags() {
+        // A heart in the Private Use Area, an inverse A as a tag, and a
+        // character the Atari doesn't have.
+        let d = import("\u{FEFF}\u{E000}{INV}A{/INV}\t\u{2603}\r\n".as_bytes());
+        assert_eq!(d.lines, vec![vec![0x00, 0xC1, TAB, b'?']]);
+        assert_eq!(
+            d.converted_from.as_deref(),
+            Some("UTF-8 text (1 character with no Atari equivalent, shown as ?)")
+        );
+        // A $9B byte inside a character doesn't make it ATASCII.
+        assert_eq!(import("\u{E0DB}\n".as_bytes()).lines, vec![vec![0xDB]]);
+        // Not UTF-8: bytes are kept.
+        let d = import(b"A\x9cB\n");
+        assert_eq!(d.lines, vec![vec![b'A', 0x9C, b'B']]);
+    }
+
+    #[test]
     fn converts_pc_text() {
-        let d = decode(b"10 REM\r\n20 END\n30 X\r");
-        assert_eq!(d.converted_from, Some("PC text"));
+        let d = import(b"10 REM\r\n20 END\n30 X\r");
+        assert_eq!(d.converted_from.as_deref(), Some("PC text"));
         assert_eq!(
             d.lines,
             vec![b"10 REM".to_vec(), b"20 END".to_vec(), b"30 X".to_vec()]
@@ -225,8 +265,18 @@ mod tests {
             encode(&d.lines, d.final_eol),
             b"10 REM\x9b20 END\x9b30 X\x9b"
         );
-        let d = decode(b"A\nB");
+        let d = import(b"A\nB");
         assert_eq!(d.lines, vec![b"A".to_vec(), b"B".to_vec()]);
+    }
+
+    #[test]
+    fn open_keeps_pc_line_ends() {
+        // LF is CTRL-J to Open.
+        let d = decode(b"A\nB\x9b");
+        assert_eq!(d.lines, vec![b"A\nB".to_vec()]);
+        assert_eq!(d.converted_from, None);
+        assert!(looks_like_pc_text(b"A\nB"));
+        assert!(!looks_like_pc_text(b"A\nB\x9b"));
     }
 
     #[test]

@@ -27,6 +27,19 @@ pub struct ScreenColors {
     pub selection_text: Color,
 }
 use crate::dialog::{After, Dialog, Purpose};
+
+/// `name` with extension `ext`, in lower case if the old extension had
+/// lower-case letters (`prog.bas` -> `prog.lst`), else in capitals.
+fn with_extension_like(name: &str, ext: &str) -> String {
+    let path = Path::new(name);
+    let old = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let ext = if old.chars().any(|c| c.is_ascii_lowercase()) {
+        ext.to_ascii_lowercase()
+    } else {
+        ext.to_ascii_uppercase()
+    };
+    path.with_extension(ext).to_string_lossy().into_owned()
+}
 use std::sync::mpsc;
 
 /// A file dialog running on another thread.
@@ -47,6 +60,8 @@ struct PendingSave {
 #[derive(Debug, Clone, Copy)]
 enum FileJobKind {
     Open,
+    /// Import a PC text file.
+    Import,
     /// Choose the default folder (Preferences).
     Folder,
     /// Save As, then optionally carry on with something.
@@ -55,6 +70,10 @@ enum FileJobKind {
     },
     /// Save Listing As: always plain text.
     SaveListingAs,
+    /// Export as PC text, Unicode or ASCII with tags.
+    Export {
+        ascii: bool,
+    },
 }
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
@@ -94,6 +113,9 @@ pub struct App {
     pub config: Config,
     pub editor: Editor,
     pub path: Option<PathBuf>,
+    /// The name an imported document, not yet saved, goes by: the PC
+    /// file's name with the text format's extension.
+    import_name: Option<String>,
     /// The format the document was read in (see `retro_core::format`).
     pub format: &'static dyn FileFormat,
     /// A save waiting for an answer in a dialog.
@@ -158,6 +180,7 @@ impl App {
             config,
             editor,
             path: None,
+            import_name: None,
             format,
             pending_save: None,
             message: None,
@@ -321,6 +344,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
+            .or_else(|| self.import_name.clone())
             .unwrap_or_else(|| "Untitled".into())
     }
 
@@ -339,6 +363,7 @@ impl App {
 
     fn new_editor(&mut self, doc: Document) {
         self.editor = Editor::new(doc, self.config.wrap, self.editor.tabs.clone());
+        self.import_name = None;
     }
 
     // ----- files -------------------------------------------------------------
@@ -363,11 +388,10 @@ impl App {
                         return;
                     }
                 };
-                let mut doc = Document::from_lines(d.lines, d.final_eol);
+                let doc = Document::from_lines(d.lines, d.final_eol);
                 self.message = None;
-                if let Some(from) = d.converted_from {
-                    doc.mark_modified();
-                    self.message = Some(format!("Converted from {from}; will save as native"));
+                if forced.is_none() && self.spec.machine.looks_like_pc_text(&bytes) {
+                    self.message = Some("PC text? Use File > Import".into());
                 }
                 if !fmt.can_encode() {
                     self.message = Some(format!(
@@ -402,6 +426,34 @@ impl App {
         self.path = Some(path.to_path_buf());
     }
 
+    /// Import a PC text file as a new, unsaved document in the text
+    /// format. Saving asks for a name, so the PC file is never overwritten
+    /// by accident.
+    fn import_path(&mut self, path: &Path) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.message = Some(format!("Can't import {}: {e}", path.display()));
+                return;
+            }
+        };
+        let d = self.spec.machine.import_text(&bytes);
+        let mut doc = Document::from_lines(d.lines, d.final_eol);
+        doc.mark_modified();
+        let text = self.spec.machine.text_format();
+        self.format = text;
+        self.new_editor(doc);
+        self.path = None;
+        self.import_name = path
+            .file_name()
+            .map(|n| with_extension_like(&n.to_string_lossy(), text.extension()));
+        self.note_folder(path);
+        self.message = Some(format!(
+            "Imported {}",
+            d.converted_from.unwrap_or_else(|| "PC text".into())
+        ));
+    }
+
     fn file_dialog(&self, title: &str, for_save: bool) -> rfd::FileDialog {
         // Each extension in both cases: file names on Atari disks are in
         // capitals, on a PC often not.
@@ -423,9 +475,13 @@ impl App {
             let shown: Vec<String> = exts.iter().map(|e| format!(".{e}")).collect();
             d = d.add_filter(format!("{name} ({})", shown.join(", ")), &both(exts));
         }
-        let mut d = d.add_filter("All files", &["*"]);
-        // Save As for an existing file starts beside it; otherwise use the
-        // default folder from Preferences.
+        let d = d.add_filter("All files", &["*"]);
+        self.in_start_dir(d, for_save)
+    }
+
+    /// Start a dialog in the folder it should open in: beside the current
+    /// file when saving, otherwise the default folder from Preferences.
+    fn in_start_dir(&self, mut d: rfd::FileDialog, for_save: bool) -> rfd::FileDialog {
         let beside = self
             .path
             .as_ref()
@@ -456,7 +512,22 @@ impl App {
             FileJobKind::SaveListingAs => self
                 .file_dialog("Save Listing As", true)
                 .set_file_name(self.listing_name()),
+            FileJobKind::Export { .. } => {
+                let d = rfd::FileDialog::new()
+                    .set_title("Export")
+                    .add_filter("Text files (.txt)", &["txt", "TXT"])
+                    .add_filter("All files", &["*"])
+                    .set_file_name(self.export_name());
+                self.in_start_dir(d, true)
+            }
             FileJobKind::Open => self.file_dialog("Open", false),
+            FileJobKind::Import => {
+                let d = rfd::FileDialog::new()
+                    .set_title("Import")
+                    .add_filter("Text files (.txt)", &["txt", "TXT"])
+                    .add_filter("All files", &["*"]);
+                self.in_start_dir(d, false)
+            }
             FileJobKind::Folder => {
                 let mut d = rfd::FileDialog::new().set_title("Default Folder");
                 if let Some(dir) = self.config.start_dir() {
@@ -468,8 +539,10 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let run = move || {
             let _ = tx.send(match kind {
-                FileJobKind::SaveAs { .. } | FileJobKind::SaveListingAs => d.save_file(),
-                FileJobKind::Open => d.pick_file(),
+                FileJobKind::SaveAs { .. }
+                | FileJobKind::SaveListingAs
+                | FileJobKind::Export { .. } => d.save_file(),
+                FileJobKind::Open | FileJobKind::Import => d.pick_file(),
                 FileJobKind::Folder => d.pick_folder(),
             });
         };
@@ -502,6 +575,7 @@ impl App {
                 self.note_folder(&path);
                 self.open_path(&path);
             }
+            (FileJobKind::Import, Some(path)) => self.import_path(&path),
             (FileJobKind::Folder, Some(dir)) => {
                 self.config.default_dir = dir.to_string_lossy().into_owned();
                 self.config.dir_mode = DirMode::Fixed;
@@ -513,7 +587,42 @@ impl App {
                 then: None,
                 confirmed: false,
             }),
+            (FileJobKind::Export { ascii }, Some(path)) => self.export_to(&path, ascii),
             (_, None) => {} // cancelled
+        }
+    }
+
+    /// The name Export suggests: the current name with `.txt`.
+    fn export_name(&self) -> String {
+        with_extension_like(&self.file_name(), "TXT")
+    }
+
+    /// Write the document as PC text with this platform's line endings.
+    /// The document keeps its own file and format.
+    fn export_to(&mut self, path: &Path, ascii: bool) {
+        let machine = &self.spec.machine;
+        let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+        let doc = &self.editor.doc;
+        let lines = doc.lines();
+        let mut text = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            text += &if ascii {
+                machine.export_ascii(line)
+            } else {
+                machine.export_unicode(line)
+            };
+            if i + 1 < lines.len() || doc.final_eol {
+                text += newline;
+            }
+        }
+        match write_atomically(path, text.as_bytes()) {
+            Ok(()) => {
+                self.note_folder(path);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let kind = if ascii { "ASCII" } else { "Unicode" };
+                self.message = Some(format!("Exported {name} ({kind}, {} bytes)", text.len()));
+            }
+            Err(e) => self.message = Some(format!("Export failed: {e}")),
         }
     }
 
@@ -527,19 +636,13 @@ impl App {
         }
     }
 
-    /// The current name with the text format's extension, keeping the old
-    /// extension's case: PROG.BAS -> PROG.LST, prog.bas -> prog.lst.
+    /// The current name with the text format's extension: PROG.BAS ->
+    /// PROG.LST, prog.bas -> prog.lst.
     fn listing_name(&self) -> String {
-        let name = self.file_name();
-        let ext = self.spec.machine.text_format().extension();
-        let path = Path::new(&name);
-        let old = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let ext = if old.chars().any(|c| c.is_ascii_lowercase()) {
-            ext.to_ascii_lowercase()
-        } else {
-            ext.to_string()
-        };
-        path.with_extension(ext).to_string_lossy().into_owned()
+        with_extension_like(
+            &self.file_name(),
+            self.spec.machine.text_format().extension(),
+        )
     }
 
     /// Save to the current file (asking for a name if there isn't one, or
@@ -688,6 +791,7 @@ impl App {
                 self.message = None;
             }
             After::Open => self.start_file_job(FileJobKind::Open),
+            After::Import => self.start_file_job(FileJobKind::Import),
             After::Quit => self.running = false,
         }
     }
@@ -722,6 +826,11 @@ impl App {
                 if let (Some(f), Some(mut save)) = (chosen, self.pending_save.take()) {
                     save.format = f;
                     self.save_to(save);
+                }
+            }
+            Purpose::Export => {
+                if button < 2 {
+                    self.start_file_job(FileJobKind::Export { ascii: button == 1 });
                 }
             }
             Purpose::ReopenAs => {
@@ -773,6 +882,10 @@ impl App {
     }
 
     /// Test hook: act as if Save Listing As chose `path`.
+    pub fn test_export(&mut self, path: PathBuf, ascii: bool) {
+        self.export_to(&path, ascii);
+    }
+
     pub fn test_save_listing_as(&mut self, path: PathBuf) {
         self.file_job = None;
         self.save_to(PendingSave {
@@ -789,6 +902,14 @@ impl App {
     }
 
     /// Test hook: show the Reopen As chooser.
+    pub fn test_import(&mut self, path: PathBuf) {
+        self.import_path(&path);
+    }
+
+    pub fn test_export_dialog(&mut self) {
+        self.dialog = Some(Dialog::export(&self.file_name()));
+    }
+
     pub fn test_reopen_as(&mut self) {
         self.reopen_as();
     }
@@ -1151,10 +1272,12 @@ impl App {
         match c {
             New => self.guard(After::New),
             Open => self.guard(After::Open),
+            Import => self.guard(After::Import),
             ReopenAs => self.reopen_as(),
             Save => self.save(None),
             SaveAs => self.start_file_job(FileJobKind::SaveAs { then: None }),
             SaveListingAs => self.start_file_job(FileJobKind::SaveListingAs),
+            Export => self.dialog = Some(Dialog::export(&self.file_name())),
             Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);

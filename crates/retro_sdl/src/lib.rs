@@ -175,7 +175,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.open_menu(m);
     }
-    // RETRO_EDITOR_HELP = help | filetypes | licensing | about | prefs | reopen
+    // RETRO_EDITOR_HELP = help | filetypes | licensing | about | prefs | reopen | export
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
         Ok("filetypes") => app::Overlay::FileTypes,
@@ -185,6 +185,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         }
         Ok("reopen") => {
             app.test_reopen_as();
+            app::Overlay::None
+        }
+        Ok("export") => {
+            app.test_export_dialog();
             app::Overlay::None
         }
         Ok("about") => {
@@ -200,6 +204,15 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
     {
         app.menu.context = Some((x, y));
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_IMPORT") {
+        app.test_import(path.into());
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_EXPORT_UNICODE") {
+        app.test_export(path.into(), false);
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_EXPORT_ASCII") {
+        app.test_export(path.into(), true);
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_LISTING_AS") {
         app.test_save_listing_as(path.into());

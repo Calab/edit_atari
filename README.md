@@ -37,7 +37,8 @@ character set is built in.
   width (F4).
 - The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it
   off).
-- Opens PC text files (LF or CR/LF) and saves them as ATASCII.
+- Imports and exports PC text: UTF-8 for the Atari font, or plain ASCII
+  with `{tags}` (see [File types](#file-types)).
 - Opens tokenized programs from nine Atari languages and saves Atari BASIC
   programs tokenized (see [File types](#file-types)).
 
@@ -104,6 +105,32 @@ dialect is recognized from the file itself.
   for `.BAS`. File > Save Listing As always saves ATASCII text (a `.LST`
   listing), whatever the name. Lines with syntax errors are saved, if you
   agree, as `ERROR-` lines, as Atari BASIC itself stores them.
+- **Exporting**: File > Export writes the document as PC text, with the
+  PC's line endings, in one of two forms:
+  - *Unicode*: UTF-8, with printable ASCII as itself and every other Atari
+    character in the Unicode Private Use Area (U+E000 + its code), where
+    the EightBit Atari font has the Atari characters. Install
+    [`assets/fonts/atari/EightBit Atari-Regular.ttf`](assets/fonts/atari/)
+    to see them in other programs. The copy and paste uses the same
+    characters.
+  - *ASCII*: plain ASCII, with other characters as tags: `{CTRL-A}` to
+    `{CTRL-Z}`, `{CTRL-,}` `{CTRL-.}` `{CTRL-;}`, `{ESC}`, `{UP}` `{DOWN}`
+    `{LEFT}` `{RIGHT}`, `{CLEAR}`, `{BACK}`, `{TAB}`, `{DEL LINE}`
+    `{INS LINE}` `{CLR TAB}` `{SET TAB}` `{BELL}` `{DEL CHAR}` `{INS CHAR}`,
+    and `{INV}`...`{/INV}` around inverse characters.
+
+  The document keeps its own file and format.
+- **Importing**: File > Import reads a PC text file (any line endings,
+  UTF-8 or not) as ATASCII: tags and Private Use characters become their
+  Atari codes, a tab becomes the Atari TAB, and accented letters the
+  international character set's codes. Characters with no Atari equivalent
+  become `?`, and the status bar says how many. Exported files read back
+  exactly. The result is a new document: Save asks for a name (suggesting
+  `.LST`), so the PC file isn't overwritten.
+
+  Open never converts: every byte is read as the Atari's, so a `$9B` is
+  always a line end and a PC line feed is a CTRL-J character. If a file
+  looks like PC text, the status bar suggests File > Import.
 
 ## Usage
 

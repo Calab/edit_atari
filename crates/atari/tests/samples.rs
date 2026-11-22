@@ -338,3 +338,52 @@ fn names_mangled(bytes: &[u8]) -> bool {
             }
     })
 }
+
+#[test]
+fn exports_read_back_exactly() {
+    use atari::Atari;
+    use retro_core::Machine;
+    let atari = Atari::default();
+    let mut count = 0;
+    for dir in [
+        "Atari BASIC",
+        "Turbo BASIC XL",
+        "Altirra BASIC",
+        "Altirra Extended BASIC",
+        "OSS BASIC XL-XE",
+        "OSS BASIC A+",
+        "Microsoft BASIC",
+        "MAC-65",
+        "Atari Logo",
+        "Atari Pilot",
+    ] {
+        for p in samples(dir) {
+            let bytes = std::fs::read(&p).unwrap();
+            let ext = p.extension().and_then(|e| e.to_str());
+            let format = retro_core::format::detect(atari.formats(), &bytes, ext);
+            let Ok(d) = format.decode(&bytes) else {
+                continue;
+            };
+            for ascii in [false, true] {
+                let text: String = d
+                    .lines
+                    .iter()
+                    .map(|l| {
+                        let s = if ascii {
+                            atari.export_ascii(l)
+                        } else {
+                            atari.export_unicode(l)
+                        };
+                        s + "\r\n"
+                    })
+                    .collect();
+                assert!(!ascii || text.is_ascii());
+                let back = atari.import_text(text.as_bytes());
+                assert!(back.converted_from.is_some(), "{}", p.display());
+                assert_eq!(back.lines, d.lines, "{} ascii {ascii}", p.display());
+            }
+            count += 1;
+        }
+    }
+    eprintln!("{count} files exported and read back");
+}
