@@ -53,6 +53,7 @@ jobs:
           cp LICENSE README.md "$dir/"
           cp assets/fonts/atari/OFL.txt "$dir/FONT-LICENSE-ATARI-OFL.txt"
           cp assets/fonts/ui/OFL.txt "$dir/FONT-LICENSE-NOTO-OFL.txt"
+          cp apps/atari_editor/THIRD_PARTY.txt "$dir/"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -29,6 +29,7 @@ pub enum Command {
     LineWarning,
     ToggleCharset,
     KeyHelp,
+    Licensing,
     About,
 }
 
@@ -111,6 +112,7 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
             items: vec![
                 item("Keyboard Help", "F1", KeyHelp),
                 SEP,
+                item("Licensing", "", Licensing),
                 item("About", "", About),
             ],
         },

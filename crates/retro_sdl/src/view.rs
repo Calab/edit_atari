@@ -10,7 +10,7 @@ use sdl2::video::Window;
 use crate::app::{App, Frame, Overlay};
 use crate::menu::{self, THEME};
 use crate::render::{Grid, rgb};
-use crate::ui_font::{self, UiFont};
+use crate::ui_font::UiFont;
 
 impl App {
     pub fn draw(
@@ -222,6 +222,9 @@ impl App {
         }
 
         let left = match &self.message {
+            _ if self.overlay != Overlay::None => {
+                "Esc closes  \u{b7}  arrows, Page Up/Down or the mouse wheel scroll".into()
+            }
             Some(m) => m.clone(),
             None => format!(
                 "{}{}",
@@ -244,55 +247,45 @@ impl App {
         let height = f.status_top - top;
         canvas.set_draw_color(Color::RGB(0xFF, 0xFF, 0xFF));
         let _ = canvas.fill_rect(Rect::new(0, top, f.width, height.max(0) as u32));
+        let x = pad * 3;
+        let max_w = f.width as i32 - x * 2;
 
-        let text = match self.overlay {
-            Overlay::Help => self.help_text(),
-            _ => format!(
-                "{}\n\nInterface font (used when the system font can't be found):\n\n{}",
-                self.spec.about,
-                ui_font::FALLBACK_LICENSE
-            ),
-        };
-        let lh = font.line_height();
-        let visible = ((height - pad * 2) / lh).max(1) as usize;
-        let lines: Vec<&str> = text.lines().collect();
-        self.overlay_top = self.overlay_top.min(lines.len().saturating_sub(visible));
-
-        // Key column: as wide as the widest key in the text.
-        let split = |l: &str| -> Option<(String, String)> {
-            let i = l.find("  ")?;
-            Some((l[..i].trim().to_string(), l[i..].trim().to_string()))
+        // Each display line: an optional key column and the text.
+        let lines: Vec<(Option<String>, String)> = match self.overlay {
+            Overlay::Help => self
+                .help_text()
+                .lines()
+                .map(|l| match l.find("  ") {
+                    Some(i) => (Some(l[..i].trim().into()), l[i..].trim().into()),
+                    None => (None, l.into()),
+                })
+                .collect(),
+            Overlay::Licensing => wrap_text(font, &self.spec.licensing, max_w),
+            _ => wrap_text(font, &self.spec.about, max_w),
         };
         let key_w = lines
             .iter()
-            .filter_map(|l| split(l))
-            .map(|(k, _)| font.measure(&k))
+            .filter_map(|(k, _)| k.as_deref())
+            .map(|k| font.measure(k))
             .max()
             .unwrap_or(0);
 
-        let x = pad * 3;
+        let lh = font.line_height();
+        let visible = ((height - pad * 2) / lh).max(1) as usize;
+        self.overlay_top = self.overlay_top.min(lines.len().saturating_sub(visible));
         let mut y = top + pad;
-        for l in lines.iter().skip(self.overlay_top).take(visible) {
-            match split(l) {
-                Some((k, d)) => {
-                    font.draw(canvas, x, y, &k, t.text);
-                    font.draw(canvas, x + key_w + pad * 3, y, &d, t.text);
+        for (key, text) in lines.iter().skip(self.overlay_top).take(visible) {
+            match key {
+                Some(k) => {
+                    font.draw(canvas, x, y, k, t.text);
+                    font.draw(canvas, x + key_w + pad * 3, y, text, t.text);
                 }
                 None => {
-                    font.draw(canvas, x, y, l.trim_end(), t.text);
+                    font.draw(canvas, x, y, text, t.text);
                 }
             }
             y += lh;
         }
-        let hint = "Esc closes  -  arrows / Page Up / Page Down / wheel scroll";
-        let hw = font.measure(hint);
-        font.draw(
-            canvas,
-            f.width as i32 - hw - pad * 2,
-            top + pad,
-            hint,
-            t.dim,
-        );
     }
 
     fn help_text(&self) -> String {
@@ -331,4 +324,27 @@ impl App {
         }
         s
     }
+}
+
+/// Word-wrap text to `max_w` pixels, keeping each line's indentation.
+fn wrap_text(font: &mut UiFont, text: &str, max_w: i32) -> Vec<(Option<String>, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+        let mut cur = indent.clone();
+        for word in line.split_whitespace() {
+            let candidate = if cur.trim().is_empty() {
+                format!("{indent}{word}")
+            } else {
+                format!("{cur} {word}")
+            };
+            if font.measure(&candidate) > max_w && !cur.trim().is_empty() {
+                out.push((None, std::mem::replace(&mut cur, format!("{indent}{word}"))));
+            } else {
+                cur = candidate;
+            }
+        }
+        out.push((None, cur));
+    }
+    out
 }

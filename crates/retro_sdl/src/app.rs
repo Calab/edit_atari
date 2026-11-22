@@ -17,6 +17,8 @@ use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 pub enum Overlay {
     None,
     Help,
+    Licensing,
+    /// Only used if the About box can't be shown as a dialog.
     About,
 }
 
@@ -456,9 +458,24 @@ impl App {
                 self.overlay = Overlay::Help;
                 self.overlay_top = 0;
             }
-            About => {
-                self.overlay = Overlay::About;
+            Licensing => {
+                self.overlay = Overlay::Licensing;
                 self.overlay_top = 0;
+            }
+            About => {
+                use sdl2::messagebox::{MessageBoxFlag, show_simple_message_box};
+                let title = format!("About {}", self.spec.title);
+                if show_simple_message_box(
+                    MessageBoxFlag::INFORMATION,
+                    &title,
+                    &self.spec.about,
+                    ctx.window,
+                )
+                .is_err()
+                {
+                    self.overlay = Overlay::About;
+                    self.overlay_top = 0;
+                }
             }
         }
     }

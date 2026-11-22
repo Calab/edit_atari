@@ -119,5 +119,8 @@ any pixels, and were checked by eye.
 - The menus and status bar use the system's interface font. When it can't
   be found, the built-in Noto Sans (© Google, SIL Open Font License 1.1, see
   `assets/fonts/ui/OFL.txt`) is used instead.
-- The licence texts are also shown in the editor's About screen
-  (Help > About).
+- The libraries built into the program (SDL2 and Rust crates) are under
+  permissive licences (Zlib, MIT, Apache-2.0); they're listed in
+  `apps/atari_editor/THIRD_PARTY.txt`. Regenerate it with
+  `tools/third_party.sh` after changing dependencies.
+- All of these are shown in the editor under Help > Licensing.

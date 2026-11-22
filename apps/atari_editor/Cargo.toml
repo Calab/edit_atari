@@ -1,6 +1,7 @@
 [package]
 name = "atari_editor"
 description = "A text editor for Atari 8-bit ATASCII files"
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
 version.workspace = true

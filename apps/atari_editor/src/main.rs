@@ -41,21 +41,67 @@ const HELP: &[&str] = &[
     "inserted as their Atari codes.",
 ];
 
-fn about() -> &'static str {
-    let text = format!(
-        "ATARI EDITOR {}\n\
+/// First year of copyright, for the About box.
+const COPYRIGHT_YEAR: &str = "2026";
+
+/// Program details for Help > About.
+fn about() -> String {
+    format!(
+        "Atari Editor\n\
+         Version {}\n\
          \n\
+         A text editor for Atari 8-bit computer files.\n\
+         \n\
+         Copyright \u{a9} {COPYRIGHT_YEAR} {}\n\
          Licensed under the GNU GPL, version 3 or later.\n\
+         See Help > Licensing for details.",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_AUTHORS").replace(':', ", "),
+    )
+}
+
+/// Everything in the program and its licences, for Help > Licensing.
+fn licensing() -> String {
+    format!(
+        "ATARI EDITOR\n\
+         Copyright \u{a9} {COPYRIGHT_YEAR} {}\n\
          \n\
-         Character set derived from the font\n\
-         \"EightBit Atari\" by Steve Boswell,\n\
-         used under the SIL Open Font License 1.1:\n\
+         This program is free software: you can redistribute it and/or modify \
+         it under the terms of the GNU General Public License as published by \
+         the Free Software Foundation, either version 3 of the License, or (at \
+         your option) any later version. It is distributed in the hope that it \
+         will be useful, but WITHOUT ANY WARRANTY; without even the implied \
+         warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. The \
+         full licence text is at the end of this page.\n\
+         \n\
+         \n\
+         ATARI CHARACTER SET\n\
+         \n\
+         The Atari characters are converted from the font \"EightBit Atari\" \
+         by Steve Boswell, used under the SIL Open Font License 1.1:\n\
+         \n\
+         {}\n\
+         \n\
+         INTERFACE FONT\n\
+         \n\
+         The menus use the system's own font. When it can't be found, the \
+         built-in Noto Sans is used, under the SIL Open Font License 1.1:\n\
+         \n\
+         {}\n\
+         \n\
+         LIBRARIES BUILT INTO THIS PROGRAM\n\
+         \n\
+         {}\n\
+         \n\
+         GNU GENERAL PUBLIC LICENSE\n\
          \n\
          {}",
-        env!("CARGO_PKG_VERSION"),
-        atari::FONT_LICENSE
-    );
-    Box::leak(text.into_boxed_str())
+        env!("CARGO_PKG_AUTHORS").replace(':', ", "),
+        atari::FONT_LICENSE,
+        retro_sdl::ui_font::FALLBACK_LICENSE,
+        include_str!("../THIRD_PARTY.txt"),
+        include_str!("../../../LICENSE"),
+    )
 }
 
 fn main() -> ExitCode {
@@ -84,6 +130,7 @@ fn main() -> ExitCode {
         ),
         help: HELP,
         about: about(),
+        licensing: licensing(),
     };
     match retro_sdl::run(spec, file) {
         Ok(()) => ExitCode::SUCCESS,

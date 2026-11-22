@@ -38,8 +38,11 @@ pub struct AppSpec {
     /// Machine-specific lines appended to the help screen. A run of two or
     /// more spaces separates a key from its description.
     pub help: &'static [&'static str],
-    /// Licence/credits text shown by the About screen.
-    pub about: &'static str,
+    /// Program name, version, author and copyright, for Help > About.
+    pub about: String,
+    /// Every licence that applies, for Help > Licensing (including the
+    /// interface font's, `ui_font::FALLBACK_LICENSE`).
+    pub licensing: String,
 }
 
 /// Open `file` (if given) and run the editor until the user quits.
@@ -115,9 +118,13 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.open_menu(m);
     }
-    if std::env::var_os("RETRO_EDITOR_HELP").is_some() {
-        app.overlay = app::Overlay::Help;
-    }
+    // RETRO_EDITOR_HELP = help | licensing | about
+    app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
+        Ok("licensing") => app::Overlay::Licensing,
+        Ok("about") => app::Overlay::About,
+        Ok(_) => app::Overlay::Help,
+        Err(_) => app::Overlay::None,
+    };
     if let Some((x, y)) = std::env::var("RETRO_EDITOR_CONTEXT")
         .ok()
         .and_then(|v| v.split_once(',').map(|(a, b)| (a.parse(), b.parse())))
