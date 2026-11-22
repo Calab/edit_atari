@@ -15,6 +15,7 @@ pub enum Command {
     ReopenAs,
     Save,
     SaveAs,
+    SaveListingAs,
     Quit,
     Undo,
     Redo,
@@ -30,6 +31,7 @@ pub enum Command {
     Preferences,
     ToggleCharset,
     KeyHelp,
+    FileTypes,
     Licensing,
     About,
 }
@@ -76,6 +78,7 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
                 SEP,
                 item("&Save", "Ctrl+S", Save),
                 item("Save &As...", "Ctrl+Shift+S", SaveAs),
+                item("Save &Listing As...", "", SaveListingAs),
                 SEP,
                 item("&Quit", "Ctrl+Q", Quit),
             ],
@@ -101,6 +104,7 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
             title: "&Help",
             items: vec![
                 item("&Keyboard Help", "F1", KeyHelp),
+                item("&File Types", "", FileTypes),
                 SEP,
                 item("&Licensing", "", Licensing),
                 item("&About", "", About),

@@ -12,8 +12,13 @@ use crate::document::Document;
 use crate::machine::Decoded;
 
 pub trait FileFormat: Sync {
-    /// Short name for the status bar and messages, e.g. "Atari BASIC".
+    /// Name for messages and dialogs, e.g. "Atari BASIC".
     fn name(&self) -> &'static str;
+
+    /// Name for the status bar, if shorter than [`FileFormat::name`].
+    fn status_name(&self) -> &'static str {
+        self.name()
+    }
 
     /// The usual file-name extension, without the dot, e.g. "BAS".
     fn extension(&self) -> &'static str;
@@ -22,6 +27,13 @@ pub trait FileFormat: Sync {
     /// format specifically, e.g. "BXL". A file with one of these is read in
     /// this format if it can be.
     fn extensions(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Other extensions this format is commonly saved under but shares
+    /// with other formats (`.BAS` for every BASIC dialect). Save As uses
+    /// them to offer the format; Open doesn't treat them as a hint.
+    fn shared_extensions(&self) -> &'static [&'static str] {
         &[]
     }
 

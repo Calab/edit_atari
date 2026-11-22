@@ -559,43 +559,44 @@ pub static BASIC_A_PLUS: Dialect = Dialect {
 /// A tokenized BASIC file in one dialect.
 pub struct TokenizedBasic {
     pub dialect: &'static Dialect,
-    /// Extensions that mean this dialect (see `FileFormat::extensions`).
-    extensions: &'static [&'static str],
+    /// The dialect's own extension, which Open takes as a hint; none for
+    /// Atari BASIC, whose `.BAS` every dialect used.
+    own_extension: &'static [&'static str],
 }
 
 pub static ATARI_BASIC_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &ATARI_BASIC,
-    extensions: &[],
+    own_extension: &[],
 };
 
 pub static TURBO_BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &TURBO_BASIC_XL,
-    extensions: &["TUR"],
+    own_extension: &["TUR"],
 };
 
 pub static ALTIRRA_EXTENDED_BASIC_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &ALTIRRA_EXTENDED_BASIC,
-    extensions: &[],
+    own_extension: &["AXB"],
 };
 
 pub static ALTIRRA_BASIC_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &ALTIRRA_BASIC,
-    extensions: &[],
+    own_extension: &["ATB"],
 };
 
 pub static BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &BASIC_XL,
-    extensions: &["BXL"],
+    own_extension: &["BXL"],
 };
 
 pub static BASIC_A_PLUS_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &BASIC_A_PLUS,
-    extensions: &[],
+    own_extension: &["BAP"],
 };
 
 pub static BASIC_XE_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &BASIC_XE,
-    extensions: &["BXE"],
+    own_extension: &["BXE"],
 };
 
 impl FileFormat for TokenizedBasic {
@@ -604,11 +605,15 @@ impl FileFormat for TokenizedBasic {
     }
 
     fn extension(&self) -> &'static str {
-        "BAS"
+        self.own_extension.first().copied().unwrap_or("BAS")
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        self.extensions
+        self.own_extension
+    }
+
+    fn shared_extensions(&self) -> &'static [&'static str] {
+        &["BAS"]
     }
 
     /// The header must be consistent and every token known to the dialect.

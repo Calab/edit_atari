@@ -154,8 +154,18 @@ impl retro_core::FileFormat for AtasciiText {
         "ATASCII text"
     }
 
+    fn status_name(&self) -> &'static str {
+        "ATASCII"
+    }
+
     fn extension(&self) -> &'static str {
         "LST"
+    }
+
+    /// Text in other languages: source for MAC/65 and the Assembler
+    /// Editor, Logo, PILOT and Action!.
+    fn shared_extensions(&self) -> &'static [&'static str] {
+        &["TXT", "ASM", "LGO", "PIL", "ACT"]
     }
 
     fn detect(&self, _bytes: &[u8]) -> bool {

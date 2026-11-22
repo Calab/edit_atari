@@ -43,6 +43,10 @@ pub struct AppSpec {
     /// Machine-specific lines appended to the help screen. A run of two or
     /// more spaces separates a key from its description.
     pub help: &'static [&'static str],
+    /// The file types the editor reads and writes, for Help > File Types.
+    /// Laid out like `help`: two or more spaces separate the extension
+    /// from its description.
+    pub file_types_help: &'static [&'static str],
     /// Program name, version, author and copyright, for Help > About.
     pub about: String,
     /// Every licence that applies, for Help > Licensing (including the
@@ -169,9 +173,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.open_menu(m);
     }
-    // RETRO_EDITOR_HELP = help | licensing | about | prefs | reopen
+    // RETRO_EDITOR_HELP = help | filetypes | licensing | about | prefs | reopen
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
+        Ok("filetypes") => app::Overlay::FileTypes,
         Ok("prefs") => {
             app.open_prefs(prefs::Field::Wrap);
             app::Overlay::None
@@ -193,6 +198,9 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
     {
         app.menu.context = Some((x, y));
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_LISTING_AS") {
+        app.test_save_listing_as(path.into());
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_AS") {
         app.test_save_as(path.into());

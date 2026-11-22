@@ -53,6 +53,8 @@ enum FileJobKind {
     SaveAs {
         then: Option<After>,
     },
+    /// Save Listing As: always plain text.
+    SaveListingAs,
 }
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
@@ -62,6 +64,7 @@ use crate::prefs::{self, Field, Op, Prefs};
 pub enum Overlay {
     None,
     Help,
+    FileTypes,
     Licensing,
 }
 
@@ -434,6 +437,9 @@ impl App {
             FileJobKind::SaveAs { .. } => self
                 .file_dialog("Save As", true)
                 .set_file_name(self.save_name()),
+            FileJobKind::SaveListingAs => self
+                .file_dialog("Save Listing As", true)
+                .set_file_name(self.listing_name()),
             FileJobKind::Open => self.file_dialog("Open", false),
             FileJobKind::Folder => {
                 let mut d = rfd::FileDialog::new().set_title("Default Folder");
@@ -446,7 +452,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let run = move || {
             let _ = tx.send(match kind {
-                FileJobKind::SaveAs { .. } => d.save_file(),
+                FileJobKind::SaveAs { .. } | FileJobKind::SaveListingAs => d.save_file(),
                 FileJobKind::Open => d.pick_file(),
                 FileJobKind::Folder => d.pick_folder(),
             });
@@ -485,6 +491,12 @@ impl App {
                 self.config.dir_mode = DirMode::Fixed;
             }
             (FileJobKind::SaveAs { then }, Some(path)) => self.save_as_to(path, then),
+            (FileJobKind::SaveListingAs, Some(path)) => self.save_to(PendingSave {
+                path,
+                format: self.spec.machine.text_format(),
+                then: None,
+                confirmed: false,
+            }),
             (_, None) => {} // cancelled
         }
     }
@@ -492,14 +504,20 @@ impl App {
     /// The name Save As suggests: the current name, with the text format's
     /// extension if the document's own format can't be written.
     fn save_name(&self) -> String {
-        let name = self.file_name();
         if self.format.can_encode() {
-            return name;
+            self.file_name()
+        } else {
+            self.listing_name()
         }
+    }
+
+    /// The current name with the text format's extension, keeping the old
+    /// extension's case: PROG.BAS -> PROG.LST, prog.bas -> prog.lst.
+    fn listing_name(&self) -> String {
+        let name = self.file_name();
         let ext = self.spec.machine.text_format().extension();
         let path = Path::new(&name);
         let old = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        // Keep the old extension's case: PROG.BAS -> PROG.LST, prog.bas -> prog.lst.
         let ext = if old.chars().any(|c| c.is_ascii_lowercase()) {
             ext.to_ascii_lowercase()
         } else {
@@ -524,9 +542,11 @@ impl App {
 
     /// Save As chose `path`: pick the format from its extension.
     ///
-    /// * An extension a writable tokenized format uses (`.BAS`...): the
-    ///   document's own format if it's one of those, otherwise ask which.
-    /// * The text format's extension or `.TXT`: text.
+    /// * The text format's extensions (`.LST`, `.TXT`, `.ASM`...): text.
+    /// * Formats that use the extension, as their own or shared (`.TUR`,
+    ///   or `.BAS` for every BASIC): the document's format if it's one of
+    ///   them and can be written; otherwise ask which, if any can be
+    ///   written; otherwise say they can't be written yet.
     /// * Anything else: the document's format if it can be written, else
     ///   text.
     fn save_as_to(&mut self, path: PathBuf, then: Option<After>) {
@@ -536,38 +556,50 @@ impl App {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_uppercase();
-        let uses_ext = |f: &&'static dyn FileFormat| {
-            f.extension() == ext || f.extensions().iter().any(|x| x.eq_ignore_ascii_case(&ext))
+        let uses = |f: &&'static dyn FileFormat| {
+            f.extension() == ext
+                || f.extensions()
+                    .iter()
+                    .chain(f.shared_extensions())
+                    .any(|x| x.eq_ignore_ascii_case(&ext))
         };
-        let candidates: Vec<&'static dyn FileFormat> = self
-            .spec
-            .machine
-            .formats()
-            .iter()
-            .copied()
-            .filter(|f| f.can_encode() && !format::same(*f, text))
-            .filter(uses_ext)
-            .collect();
         let pending = |format| PendingSave {
             path: path.clone(),
             format,
             then,
             confirmed: false,
         };
-        if !candidates.is_empty() {
-            if candidates.iter().any(|f| format::same(*f, self.format)) {
-                self.save_to(pending(self.format));
-            } else {
-                let mut names: Vec<&'static str> = candidates.iter().map(|f| f.name()).collect();
-                names.push(text.name());
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                self.dialog = Some(Dialog::save_as_format(&name.unwrap_or_default(), names));
-                self.pending_save = Some(pending(text));
-            }
-        } else if ext == text.extension() || ext == "TXT" || !self.format.can_encode() {
-            self.save_to(pending(text));
-        } else {
+        if uses(&text) {
+            return self.save_to(pending(text));
+        }
+        let users: Vec<&'static dyn FileFormat> = self
+            .spec
+            .machine
+            .formats()
+            .iter()
+            .copied()
+            .filter(|f| !format::same(*f, text))
+            .filter(uses)
+            .collect();
+        let writable: Vec<_> = users.iter().copied().filter(|f| f.can_encode()).collect();
+        if writable.iter().any(|f| format::same(*f, self.format)) {
             self.save_to(pending(self.format));
+        } else if !writable.is_empty() {
+            let mut names: Vec<&'static str> = writable.iter().map(|f| f.name()).collect();
+            names.push(text.name());
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            self.dialog = Some(Dialog::save_as_format(&name.unwrap_or_default(), names));
+            self.pending_save = Some(pending(text));
+        } else if let Some(f) = users.first() {
+            self.message = Some(format!(
+                "{} files can't be written yet; save as .{} instead",
+                f.name(),
+                text.extension()
+            ));
+        } else if self.format.can_encode() {
+            self.save_to(pending(self.format));
+        } else {
+            self.save_to(pending(text));
         }
     }
 
@@ -712,6 +744,17 @@ impl App {
     /// Test hook: press button `n` of the open dialog.
     pub fn test_choose(&mut self, n: usize) {
         self.dialog_choose(n);
+    }
+
+    /// Test hook: act as if Save Listing As chose `path`.
+    pub fn test_save_listing_as(&mut self, path: PathBuf) {
+        self.file_job = None;
+        self.save_to(PendingSave {
+            path,
+            format: self.spec.machine.text_format(),
+            then: None,
+            confirmed: false,
+        });
     }
 
     /// Test hook: act as if Save As chose `path`.
@@ -1085,6 +1128,7 @@ impl App {
             ReopenAs => self.reopen_as(),
             Save => self.save(None),
             SaveAs => self.start_file_job(FileJobKind::SaveAs { then: None }),
+            SaveListingAs => self.start_file_job(FileJobKind::SaveListingAs),
             Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);
@@ -1144,6 +1188,10 @@ impl App {
             Preferences => self.open_prefs(Field::Wrap),
             KeyHelp => {
                 self.overlay = Overlay::Help;
+                self.overlay_top = 0;
+            }
+            FileTypes => {
+                self.overlay = Overlay::FileTypes;
                 self.overlay_top = 0;
             }
             Licensing => {

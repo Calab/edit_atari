@@ -15,6 +15,44 @@ use retro_sdl::{
     render::{ColorModel, Palette},
 };
 
+/// Help > File Types: the extensions for each language.
+const FILE_TYPES: &[&str] = &[
+    "FILE TYPES",
+    "",
+    "Programs as each language SAVEs them (tokenized):",
+    "",
+    ".BAS  Atari BASIC. Any BASIC below may also be",
+    "      saved as .BAS: the dialect is recognized",
+    "      from the file itself.",
+    ".TUR  Turbo-BASIC XL",
+    ".ATB  Altirra BASIC",
+    ".AXB  Altirra Extended BASIC",
+    ".BXL  OSS BASIC XL",
+    ".BXE  OSS BASIC XE",
+    ".BAP  OSS BASIC A+",
+    ".AMB  Microsoft BASIC II (also LOCKed programs)",
+    ".M65  MAC/65 source",
+    "",
+    "Plain ATASCII text:",
+    "",
+    ".LST  Program listings (LIST \"D:FILE\")",
+    ".ASM  Assembler source (MAC/65, Assembler Editor)",
+    ".LGO  Atari Logo (its SAVE writes text)",
+    ".PIL  Atari PILOT (its SAVE writes text)",
+    ".ACT  Action! source",
+    ".TXT  Other text",
+    "",
+    "Opening reads any of these, whatever its name.",
+    "File > Reopen As reads a file as another format.",
+    "",
+    "Saving: Atari BASIC programs can be saved",
+    "tokenized; other languages are saved as .LST",
+    "text for now. Save As picks the format from the",
+    "extension you give, asking which BASIC for .BAS.",
+    "File > Save Listing As always saves ATASCII text",
+    "(a .LST listing), whatever the name.",
+];
+
 const HELP: &[&str] = &[
     "ATARI KEYS",
     "",
@@ -141,8 +179,9 @@ fn main() -> ExitCode {
         file_types: (
             "Atari files",
             &[
-                "lst", "LST", "bas", "BAS", "tur", "TUR", "txt", "TXT", "asm", "ASM", "m65", "M65",
-                "act", "ACT",
+                "bas", "BAS", "tur", "TUR", "atb", "ATB", "axb", "AXB", "bxl", "BXL", "bxe", "BXE",
+                "bap", "BAP", "amb", "AMB", "m65", "M65", "lst", "LST", "asm", "ASM", "lgo", "LGO",
+                "pil", "PIL", "act", "ACT", "txt", "TXT",
             ],
         ),
         colors: Some(ColorModel {
@@ -157,6 +196,7 @@ fn main() -> ExitCode {
             default_border: palette::BORDER,
         }),
         help: HELP,
+        file_types_help: FILE_TYPES,
         about: about(),
         licensing: licensing(),
     };

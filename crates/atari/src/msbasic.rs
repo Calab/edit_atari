@@ -198,7 +198,15 @@ impl FileFormat for MicrosoftBasic {
     }
 
     fn extension(&self) -> &'static str {
-        "BAS"
+        "AMB"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["AMB"]
+    }
+
+    fn shared_extensions(&self) -> &'static [&'static str] {
+        &["BAS"]
     }
 
     fn detect(&self, bytes: &[u8]) -> bool {

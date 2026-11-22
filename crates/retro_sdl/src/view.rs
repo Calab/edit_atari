@@ -207,9 +207,8 @@ impl App {
             parts.push((label.into(), t.highlight));
         }
         let m = &self.spec.machine;
-        if !retro_core::format::same(self.format, m.text_format()) {
-            parts.push((self.format.name().into(), t.text));
-        }
+        // The file's type: "Atari BASIC", "ATASCII"...
+        parts.push((self.format.status_name().into(), t.text));
         if m.charset() != 0 {
             parts.push((m.charsets()[m.charset()].into(), t.text));
         }
@@ -272,9 +271,13 @@ impl App {
         let max_w = f.width as i32 - x * 2;
 
         // Each display line: an optional key column and the text.
+        let text = match self.overlay {
+            Overlay::Help => self.help_text(),
+            Overlay::FileTypes => self.spec.file_types_help.join("\n"),
+            _ => String::new(),
+        };
         let lines: Vec<(Option<String>, String)> = match self.overlay {
-            Overlay::Help => self
-                .help_text()
+            Overlay::Help | Overlay::FileTypes => text
                 .lines()
                 .map(|l| match l.find("  ") {
                     Some(i) => (Some(l[..i].trim().into()), l[i..].trim().into()),
