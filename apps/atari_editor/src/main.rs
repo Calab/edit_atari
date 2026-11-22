@@ -230,6 +230,7 @@ fn main() -> ExitCode {
             selection: (0xF2, 0xC8, 0x4B),
             selection_text: (0x10, 0x1C, 0x40),
         },
+        icon: b'A',
         file_types: OPEN_FILTERS,
         colors: Some(ColorModel {
             hues: palette::HUES,

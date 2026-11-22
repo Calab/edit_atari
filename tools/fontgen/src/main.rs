@@ -255,6 +255,104 @@ fn write_sheet(bytes: &[u8], count: usize, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Icon sizes written as PNG files (all multiples of 8, so the glyph's
+/// pixels stay square).
+const ICON_SIZES: [u32; 8] = [16, 32, 48, 64, 128, 256, 512, 1024];
+
+/// One glyph filling a `size` x `size` square, as PNG bytes.
+fn icon_png(glyph: &[u8], size: u32, bg: [u8; 3], fg: [u8; 3]) -> Result<Vec<u8>, String> {
+    let scale = size / 8;
+    let mut img = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let on = glyph[(y / scale) as usize] & (0x80 >> (x / scale)) != 0;
+            img.extend_from_slice(if on { &fg } else { &bg });
+            img.push(255);
+        }
+    }
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, size, size);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wr = enc.write_header().map_err(|e| e.to_string())?;
+    wr.write_image_data(&img).map_err(|e| e.to_string())?;
+    wr.finish().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+fn hex_color(s: &str) -> Result<[u8; 3], String> {
+    let n = u32::from_str_radix(s.trim_start_matches('#'), 16)
+        .map_err(|e| format!("bad colour {s}: {e}"))?;
+    Ok([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+/// `icon <font.bin> <code-hex> <bg> <fg> <out-prefix>`: the glyph for a
+/// code as `<prefix>-<size>.png` for each size, `<prefix>.ico` (16-256)
+/// and `<prefix>.icns` (16-1024).
+fn icon(args: &[String]) -> Result<(), String> {
+    let font = std::fs::read(&args[0]).map_err(|e| format!("{}: {e}", args[0]))?;
+    let code = usize::from_str_radix(args[1].trim_start_matches("0x"), 16)
+        .map_err(|e| format!("bad code {}: {e}", args[1]))?;
+    let glyph = font
+        .get(code * 8..code * 8 + 8)
+        .ok_or("code past the end of the font")?;
+    let (bg, fg) = (hex_color(&args[2])?, hex_color(&args[3])?);
+    let prefix = &args[4];
+    let mut pngs = std::collections::BTreeMap::new();
+    for size in ICON_SIZES {
+        let png = icon_png(glyph, size, bg, fg)?;
+        let path = format!("{prefix}-{size}.png");
+        std::fs::write(&path, &png).map_err(|e| format!("{path}: {e}"))?;
+        pngs.insert(size, png);
+    }
+
+    // ICO: PNG images (Windows Vista and later), 256 stored as 0.
+    let sizes: Vec<u32> = ICON_SIZES.into_iter().filter(|&s| s <= 256).collect();
+    let mut ico = vec![0, 0, 1, 0];
+    ico.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * sizes.len() as u32;
+    for &size in &sizes {
+        let len = pngs[&size].len() as u32;
+        let dim = if size == 256 { 0 } else { size as u8 };
+        ico.extend_from_slice(&[dim, dim, 0, 0, 1, 0, 32, 0]);
+        ico.extend_from_slice(&len.to_le_bytes());
+        ico.extend_from_slice(&offset.to_le_bytes());
+        offset += len;
+    }
+    for &size in &sizes {
+        ico.extend_from_slice(&pngs[&size]);
+    }
+    let path = format!("{prefix}.ico");
+    std::fs::write(&path, &ico).map_err(|e| format!("{path}: {e}"))?;
+
+    // ICNS: PNG images under their type codes (the @2x ones reuse sizes).
+    const TYPES: [(&[u8; 4], u32); 10] = [
+        (b"icp4", 16),
+        (b"icp5", 32),
+        (b"icp6", 64),
+        (b"ic07", 128),
+        (b"ic08", 256),
+        (b"ic09", 512),
+        (b"ic10", 1024),
+        (b"ic11", 32),
+        (b"ic12", 64),
+        (b"ic13", 256),
+    ];
+    let mut body = Vec::new();
+    for (kind, size) in TYPES {
+        let png = &pngs[&size];
+        body.extend_from_slice(kind);
+        body.extend_from_slice(&(png.len() as u32 + 8).to_be_bytes());
+        body.extend_from_slice(png);
+    }
+    let mut icns = b"icns".to_vec();
+    icns.extend_from_slice(&(body.len() as u32 + 8).to_be_bytes());
+    icns.extend_from_slice(&body);
+    let path = format!("{prefix}.icns");
+    std::fs::write(&path, &icns).map_err(|e| format!("{path}: {e}"))?;
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let lenient = args.iter().any(|a| a == "--lenient");
@@ -262,8 +360,12 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("info") if args.len() >= 4 => info(&args[1..]),
         Some("build") if args.len() >= 5 => build(&args[1..], lenient),
+        Some("icon") if args.len() >= 6 => icon(&args[1..]),
         _ => Err(
-            "usage: fontgen info|build <font.ttf> <first-hex> <count> [out.bin] [sheet.png]".into(),
+            "usage: fontgen info|build <font.ttf> <first-hex> <count> [out.bin] \
+                  [sheet.png]\n       fontgen icon <font.bin> <code-hex> <bg-rrggbb> \
+                  <fg-rrggbb> <out-prefix>"
+                .into(),
         ),
     };
     match result {

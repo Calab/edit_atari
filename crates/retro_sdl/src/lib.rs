@@ -24,6 +24,27 @@ use sdl2::mouse::MouseButton;
 pub use config::{Config, ControlKey};
 use render::{ColorModel, Palette};
 
+/// The window icon: the icon character filling 64x64 pixels, as the
+/// icon files in `assets/icons` are drawn.
+fn window_icon(spec: &AppSpec) -> Option<sdl2::surface::Surface<'static>> {
+    const SIZE: u32 = 64;
+    let glyph = spec.machine.glyph(spec.icon);
+    let (bg, fg) = (spec.palette.background, spec.palette.foreground);
+    let mut surface =
+        sdl2::surface::Surface::new(SIZE, SIZE, sdl2::pixels::PixelFormatEnum::RGBA32).ok()?;
+    let pitch = surface.pitch() as usize;
+    surface.with_lock_mut(|px| {
+        for y in 0..SIZE as usize {
+            for x in 0..SIZE as usize {
+                let on = glyph[y / 8] & (0x80 >> (x / 8)) != 0;
+                let (r, g, b) = if on { fg } else { bg };
+                px[y * pitch + x * 4..][..4].copy_from_slice(&[r, g, b, 255]);
+            }
+        }
+    });
+    Some(surface)
+}
+
 /// Everything that makes an editor specific to one machine.
 pub struct AppSpec {
     /// Window title, e.g. "Atari Editor".
@@ -35,6 +56,9 @@ pub struct AppSpec {
     /// Generates the key-click sound: (sample rate, volume) -> mono samples.
     pub click: fn(u32, f32) -> Vec<f32>,
     pub palette: Palette,
+    /// The character code drawn as the window icon, in the palette's
+    /// foreground and background colours.
+    pub icon: u8,
     /// Selectable text/background colours and attract mode, if the machine
     /// has a colour model. Without one, `palette` is used as is.
     pub colors: Option<ColorModel>,
@@ -71,13 +95,16 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // display's pixel density is known.
     let native_cols = app.spec.machine.screen_columns() as u32 + 4;
     let native_rows = 24 + 5;
-    let window = video
+    let mut window = video
         .window(app.spec.title, native_cols * 8, native_rows * 8)
         .position_centered()
         .resizable()
         .allow_highdpi()
         .build()
         .map_err(|e| e.to_string())?;
+    if let Some(icon) = window_icon(&app.spec) {
+        window.set_icon(icon);
+    }
     let mut canvas = window
         .into_canvas()
         .present_vsync()

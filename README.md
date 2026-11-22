@@ -5,7 +5,7 @@ It edits ATASCII text (Atari BASIC `LIST` files, Action!, Assembler Editor and
 MAC/65 source saved as text) using the real Atari character set, with `$9B`
 line endings.
 
-Each release is a single program file with nothing else to install: the Atari
+The program is a single file with nothing else to install: the Atari
 character set is built in.
 
 ![The Atari character set](docs/images/font_atascii_sheet.png)
@@ -144,6 +144,35 @@ dialect is recognized from the file itself.
   always a line end and a PC line feed is a CTRL-J character. If a file
   looks like PC text, the status bar suggests File > Import.
 
+## Installing
+
+Download the package for your computer from the
+[Releases](https://github.com/Calab/edit_atari/releases) page:
+
+| Package                                      | For                              |
+|----------------------------------------------|----------------------------------|
+| `atari_editor-1.0.0-windows-x86_64.zip`      | Windows 10 and 11                |
+| `atari_editor-1.0.0-macos-apple-silicon.zip` | Macs with M1 or later chips      |
+| `atari_editor-1.0.0-macos-intel.zip`         | Older Macs with Intel processors |
+| `atari_editor-1.0.0-linux-x86_64.tar.gz`     | 64-bit Linux                     |
+
+- **Windows**: unzip it anywhere and run `atari_editor.exe`. To make a
+  shortcut, right-click it and choose *Create shortcut* (or *Pin to Start*).
+  The program isn't signed, so the first time Windows SmartScreen may say
+  it "protected your PC": choose *More info*, then *Run anyway*.
+- **macOS**: unzip it and drag *Atari Editor* to Applications. The app
+  isn't notarized by Apple, so the first time macOS refuses to open it:
+  open *System Settings > Privacy & Security*, scroll down and click
+  *Open Anyway* (on older macOS, right-click the app and choose *Open*).
+- **Linux**: unpack it and run `./install.sh` in its folder. That puts the
+  program in `~/.local/bin` and adds *Atari Editor* to your applications
+  menu with its icon. Or just run `./atari_editor` from the folder.
+
+Each package also has the `fonts` folder with the EightBit Atari font.
+Install it (double-click it on Windows or macOS; copy it to
+`~/.local/share/fonts` on Linux) to see Atari characters in other programs,
+in files saved with File > Export as *Atari Font*.
+
 ## Usage
 
 ```
@@ -166,7 +195,16 @@ from source and linked in, so the result doesn't need SDL installed.
 
 On Linux, building SDL needs the X11/Wayland/audio development packages; see
 `.github/workflows/build.yml` for the list. GitHub Actions builds Linux,
-Windows and macOS versions on every push.
+Windows and macOS (Apple Silicon and Intel) packages on every push; pushing
+a version tag such as `v1.0.0` also publishes them as a GitHub Release.
+
+The icons in `assets/icons` (PNG sizes, `.ico` for Windows, `.icns` for
+macOS) are the Atari font's `A` in the default colours, made with:
+
+```
+cargo run -p fontgen -- icon crates/atari/src/font_atascii.bin 41 1A55A8 8CC4FF \
+    assets/icons/atari_editor
+```
 
 ### Developing in VS Code
 
@@ -177,14 +215,16 @@ choose a file" in the Run and Debug view.
 
 ## Project layout
 
-| Path | Contents |
-|------|----------|
-| `crates/retro_core` | Machine-independent editor: document, layout, keyboard interface |
-| `crates/retro_sdl` | SDL2 window, drawing, sound and settings, shared by all machines |
-| `crates/atari` | Atari specifics: ATASCII, character set, keyboard rules, key click |
-| `apps/atari_editor` | The Atari editor program |
-| `tools/fontgen` | Converts the pixel TrueType font into the built-in 8x8 character set |
-| `docs/` | Design notes and tokenized-language references |
+| Path                | Contents                                                                                  |
+|---------------------|-------------------------------------------------------------------------------------------|
+| `crates/retro_core` | Machine-independent editor: document, layout, keyboard interface                          |
+| `crates/retro_sdl`  | SDL2 window, drawing, sound and settings, shared by all machines                          |
+| `crates/atari`      | Atari specifics: ATASCII, character set, keyboard rules, key click                        |
+| `apps/atari_editor` | The Atari editor program                                                                  |
+| `tools/fontgen`     | Converts the pixel TrueType font into the built-in 8x8 character set, and makes the icons |
+| `assets/`           | Fonts and program icons                                                                   |
+| `packaging/`        | Release extras: Linux menu entry and installer, macOS app details                         |
+| `docs/`             | Design notes and tokenized-language references                                            |
 
 The machine-specific parts sit behind the `Machine` and `KeyboardRules`
 traits, so an editor for another 8-bit computer (e.g. a Commodore 64 PETSCII
