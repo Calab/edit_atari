@@ -19,8 +19,13 @@ character set is built in.
   - **Esc** before a key inserts that key's character instead of performing
     its action, as on the Atari: Esc then cursor-up inserts the up-arrow
     character.
-  - The **`** key (left of 1; also **F6**) is the Atari inverse key: it
-    turns inverse video on or off for typed characters.
+  - The **`** key (left of 1) is the Atari inverse key: it turns inverse
+    video on or off for typed characters.
+  - **Caps Lock** clicks like the Atari's CAPS key.
+- **F6** switches between the standard and the XL/XE international
+  character set (accented letters in place of the graphics at $00-$1A, $60
+  and $7B). With it on, accented letters typed on the PC keyboard are
+  inserted as their Atari codes, and copy/paste uses real accented letters.
   - **Tab** follows the Atari's tab stops (power-up stops at screen columns
     7, 15, 23, 31 and 39 of each row). Shift+Tab sets a stop at the cursor
     and CONTROL+Tab clears one; with no stops left in the logical line, Tab
@@ -36,7 +41,8 @@ character set is built in.
 
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
   S, Z, Y, X, C, V, A) and the system's own Open and Save dialogs.
-- Select text with Shift+arrows or the mouse. Copy and paste work with
+- Select text with Shift+arrows or the mouse; selected text is shown in its
+  own colour so it isn't confused with inverse characters. Copy and paste work with
   other programs: ordinary characters paste as plain text, and Atari
   graphics characters use the same private Unicode characters as the
   EightBit Atari font, so they paste back exactly.
@@ -98,7 +104,10 @@ cargo run -p fontgen -- build "assets/fonts/atari/EightBit Atari-Regular.ttf" \
 ```
 
 The tool refuses to write output if any glyph outline is off the 8x8 pixel
-grid.
+grid. The international set (`E100 256 crates/atari/src/font_international.bin
+docs/images/font_international_sheet.png --lenient`) needs `--lenient`: 16
+accented letters have outline points between pixel centres that don't change
+any pixels, and were checked by eye.
 
 ## Licences
 

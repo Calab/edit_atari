@@ -23,6 +23,57 @@ pub const BELL: u8 = 0xFD;
 pub const DELETE_CHAR: u8 = 0xFE;
 pub const INSERT_CHAR: u8 = 0xFF;
 
+/// The XL/XE international character set: the codes whose glyphs differ
+/// from standard ATASCII, and the character each one shows. (Their inverse
+/// versions, code + $80, differ too.)
+pub const INTERNATIONAL: [(u8, char); 29] = [
+    (0x00, 'á'),
+    (0x01, 'ù'),
+    (0x02, 'Ñ'),
+    (0x03, 'É'),
+    (0x04, 'ç'),
+    (0x05, 'ô'),
+    (0x06, 'ò'),
+    (0x07, 'ì'),
+    (0x08, '£'),
+    (0x09, 'ï'),
+    (0x0A, 'ü'),
+    (0x0B, 'ä'),
+    (0x0C, 'Ö'),
+    (0x0D, 'ú'),
+    (0x0E, 'ó'),
+    (0x0F, 'ö'),
+    (0x10, 'Ü'),
+    (0x11, 'â'),
+    (0x12, 'û'),
+    (0x13, 'î'),
+    (0x14, 'é'),
+    (0x15, 'è'),
+    (0x16, 'ñ'),
+    (0x17, 'ê'),
+    (0x18, 'å'),
+    (0x19, 'à'),
+    (0x1A, 'Å'),
+    (0x60, '¡'),
+    (0x7B, 'Ä'),
+];
+
+/// The international-set code for an accented character, if it has one.
+pub fn international_code(c: char) -> Option<u8> {
+    INTERNATIONAL
+        .iter()
+        .find(|&&(_, ch)| ch == c)
+        .map(|&(code, _)| code)
+}
+
+/// The accented character an international-set code shows, if any.
+pub fn international_char(code: u8) -> Option<char> {
+    INTERNATIONAL
+        .iter()
+        .find(|&&(c, _)| c == code)
+        .map(|&(_, ch)| ch)
+}
+
 /// Decode an ATASCII file. A file with no EOL bytes but with LF/CR line
 /// endings is treated as a PC text file and converted.
 pub fn decode(bytes: &[u8]) -> Decoded {

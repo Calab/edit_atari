@@ -111,4 +111,8 @@ pub trait KeyboardRules {
     fn handle(&mut self, input: KeyInput) -> EditAction;
     /// Short status-bar indicators for active modes (e.g. "INV", "ESC").
     fn indicators(&self) -> Vec<&'static str>;
+
+    /// The machine's character set changed (see `Machine::set_charset`),
+    /// which may change what typed characters produce.
+    fn set_charset(&mut self, _index: usize) {}
 }

@@ -24,6 +24,21 @@ pub trait Machine {
     /// the leftmost pixel. Inverse/reverse video is part of the glyph.
     fn glyph(&self, code: u8) -> [u8; 8];
 
+    /// Names of the character sets the machine can display, e.g.
+    /// `["Standard", "International"]`. The first is the default.
+    fn charsets(&self) -> &'static [&'static str] {
+        &["Standard"]
+    }
+
+    /// The character set in use (an index into [`Machine::charsets`]).
+    fn charset(&self) -> usize {
+        0
+    }
+
+    /// Switch character set. Affects [`Machine::glyph`] and the clipboard
+    /// mapping; the codes in the document never change.
+    fn set_charset(&mut self, _index: usize) {}
+
     /// Code of the blank (space) character.
     fn space(&self) -> u8;
 

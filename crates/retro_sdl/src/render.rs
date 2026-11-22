@@ -14,6 +14,10 @@ pub struct Palette {
     pub border: (u8, u8, u8),
     /// Text past the line-length warning column.
     pub warning: (u8, u8, u8),
+    /// Selected text: background and character colours. Distinct from
+    /// inverse video so selections can't be mistaken for inverse text.
+    pub selection: (u8, u8, u8),
+    pub selection_text: (u8, u8, u8),
 }
 
 pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {

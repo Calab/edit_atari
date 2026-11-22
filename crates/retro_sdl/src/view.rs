@@ -61,6 +61,7 @@ impl App {
     fn draw_text(&self, grid: &mut Grid, f: &Frame) {
         let pal = self.spec.palette;
         let (fg, bg, warn) = (rgb(pal.foreground), rgb(pal.background), rgb(pal.warning));
+        let (sel_bg, sel_fg) = (rgb(pal.selection), rgb(pal.selection_text));
         let layout = &f.layout;
         let doc = &self.editor.doc;
         let w = layout.text_cols;
@@ -101,14 +102,15 @@ impl App {
                     &line[split..end],
                     warn,
                 );
-                // Selection: inverse colours.
+                // Selection: its own colours, so inverse characters
+                // still look inverse inside it.
                 if let Some((s0, s1)) = sel_cols {
                     let (c0, c1) = (s0.max(r * w), s1.min((r + 1) * w));
                     for c in c0..c1 {
                         let x = layout.left_margin + c - r * w;
-                        grid.fill(x, screen, 1, fg);
+                        grid.fill(x, screen, 1, sel_bg);
                         if let Some(&code) = line.get(c) {
-                            grid.codes(x, screen, &[code], bg);
+                            grid.codes(x, screen, &[code], sel_fg);
                         }
                     }
                 }
@@ -129,10 +131,8 @@ impl App {
                 .get(cur.col)
                 .copied()
                 .unwrap_or(self.spec.machine.space());
-            let in_sel = sel.is_some_and(|(a, b)| cur >= a && cur < b);
-            let (cf, cb) = if in_sel { (bg, fg) } else { (fg, bg) };
-            grid.fill(layout.left_margin + cx, screen, 1, cf);
-            grid.codes(layout.left_margin + cx, screen, &[code], cb);
+            grid.fill(layout.left_margin + cx, screen, 1, fg);
+            grid.codes(layout.left_margin + cx, screen, &[code], bg);
         }
     }
 
@@ -180,6 +180,10 @@ impl App {
                 other => other,
             };
             parts.push((label.into(), t.highlight));
+        }
+        let m = &self.spec.machine;
+        if m.charset() != 0 {
+            parts.push((m.charsets()[m.charset()].into(), t.text));
         }
         parts.push((
             if doc.overwrite { "Overwrite" } else { "Insert" }.into(),
@@ -299,7 +303,8 @@ impl App {
              Ctrl+Home / End  Start / end of file\n\
              Ctrl+ + / -  Zoom in / out\n\
              F4  40 columns / window width\n\
-             ` or F6  Inverse video on/off (the Atari key)\n\
+             `  Inverse video on/off (the Atari key; left of 1)\n\
+             F6  Standard / international character set\n\
              F7  Key click on/off\n\
              F8  CONTROL key ({ctrl})\n\
              F9  Line length warning\n\

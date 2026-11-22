@@ -35,6 +35,8 @@ pub struct Config {
     /// Characters past this column are drawn in the warning colour;
     /// 0 turns the warning off.
     pub line_warning: usize,
+    /// Character set index (0 = the machine's standard set).
+    pub charset: usize,
 }
 
 impl Default for Config {
@@ -46,6 +48,7 @@ impl Default for Config {
             key_click: true,
             click_volume: 0.25,
             line_warning: DEFAULT_LINE_WARNING,
+            charset: 0,
         }
     }
 }
@@ -105,6 +108,11 @@ impl Config {
                     }
                 }
                 "key_click" => c.key_click = v != "off",
+                "charset" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        c.charset = n.min(15);
+                    }
+                }
                 "line_warning" => {
                     if let Ok(n) = v.parse::<usize>() {
                         c.line_warning = n.min(MAX_LINE_WARNING);
@@ -132,7 +140,9 @@ impl Config {
              key_click = {}\n\
              click_volume = {}\n\
              # line_warning: highlight characters past this column (0 = off)\n\
-             line_warning = {}\n",
+             line_warning = {}\n\
+             # charset: 0 = standard, 1 = international (Atari)\n\
+             charset = {}\n",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -145,6 +155,7 @@ impl Config {
             if self.key_click { "on" } else { "off" },
             self.click_volume,
             self.line_warning,
+            self.charset,
         )
     }
 
@@ -170,6 +181,7 @@ mod tests {
             key_click: false,
             click_volume: 0.5,
             line_warning: 0,
+            charset: 1,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }

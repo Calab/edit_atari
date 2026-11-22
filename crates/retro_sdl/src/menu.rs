@@ -27,6 +27,7 @@ pub enum Command {
     ToggleClick,
     ToggleControlKey,
     LineWarning,
+    ToggleCharset,
     KeyHelp,
     About,
 }
@@ -59,9 +60,11 @@ const SEP: Item = Item {
     command: None,
 };
 
-pub fn menus() -> Vec<Menu> {
+/// The menus. `alt_charset` names the machine's second character set, if
+/// it has one, for a toggle in the Options menu.
+pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
     use Command::*;
-    vec![
+    let mut m = vec![
         Menu {
             title: "File",
             mnemonic: 'f',
@@ -111,7 +114,11 @@ pub fn menus() -> Vec<Menu> {
                 item("About", "", About),
             ],
         },
-    ]
+    ];
+    if let Some(label) = alt_charset {
+        m[2].items.insert(4, item(label, "F6", ToggleCharset));
+    }
+    m
 }
 
 /// Interface colours (a light theme like a standard desktop app).

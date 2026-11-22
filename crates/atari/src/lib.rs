@@ -13,11 +13,23 @@ use retro_core::{Decoded, Document, Machine, TabStops};
 /// `assets/fonts/atari/OFL.txt`.
 static FONT: &[u8; 2048] = include_bytes!("font_atascii.bin");
 
+/// The XL/XE international character set (CHBAS = $CC), from the same font's
+/// U+E100 block. Generated with `fontgen --lenient`: 16 accented letters
+/// have outline points between pixel centres, which don't change any pixels;
+/// they were checked by eye (see docs/images/font_international_sheet.png).
+static FONT_INTL: &[u8; 2048] = include_bytes!("font_international.bin");
+
+/// Index of the international set in [`Machine::charsets`].
+pub const INTERNATIONAL: usize = 1;
+
 /// The font licence text, for display in the About screen.
 pub const FONT_LICENSE: &str = include_str!("../../../assets/fonts/atari/OFL.txt");
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Atari;
+pub struct Atari {
+    /// 0 = standard ATASCII, 1 = international.
+    charset: usize,
+}
 
 impl Machine for Atari {
     fn name(&self) -> &'static str {
@@ -25,8 +37,25 @@ impl Machine for Atari {
     }
 
     fn glyph(&self, code: u8) -> [u8; 8] {
+        let font = if self.charset == INTERNATIONAL {
+            FONT_INTL
+        } else {
+            FONT
+        };
         let i = code as usize * 8;
-        FONT[i..i + 8].try_into().unwrap()
+        font[i..i + 8].try_into().unwrap()
+    }
+
+    fn charsets(&self) -> &'static [&'static str] {
+        &["Standard", "International"]
+    }
+
+    fn charset(&self) -> usize {
+        self.charset
+    }
+
+    fn set_charset(&mut self, index: usize) {
+        self.charset = index.min(INTERNATIONAL);
     }
 
     fn space(&self) -> u8 {
@@ -49,8 +78,18 @@ impl Machine for Atari {
 
     /// ATASCII characters that match ASCII stay ASCII on the clipboard;
     /// graphics, arrows, inverse etc. use U+E000 + code, the private-use
-    /// range where the EightBit Atari font puts the same glyphs.
+    /// range where the EightBit Atari font puts the same glyphs. With the
+    /// international set, accented letters are real Unicode letters and
+    /// their inverse forms use the font's U+E100 range.
     fn char_for_code(&self, code: u8) -> char {
+        if self.charset == INTERNATIONAL {
+            if let Some(ch) = atascii::international_char(code) {
+                return ch;
+            }
+            if code >= 0x80 && atascii::international_char(code & 0x7F).is_some() {
+                return char::from_u32(0xE100 + code as u32).unwrap();
+            }
+        }
         match code {
             0x20..=0x5F | 0x61..=0x7A | 0x7C => code as char,
             _ => char::from_u32(0xE000 + code as u32).unwrap(),
@@ -59,8 +98,12 @@ impl Machine for Atari {
 
     fn code_for_char(&self, c: char) -> Option<u8> {
         match c as u32 {
-            n @ 0xE000..=0xE0FF => Some((n - 0xE000) as u8),
-            _ => keyboard::printable(c),
+            n @ 0xE000..=0xE1FF => Some((n & 0xFF) as u8),
+            _ => keyboard::printable(c).or_else(|| {
+                (self.charset == INTERNATIONAL)
+                    .then(|| atascii::international_code(c))
+                    .flatten()
+            }),
         }
     }
 
@@ -80,7 +123,7 @@ mod tests {
     #[test]
     fn tab_follows_atari_stops() {
         use retro_core::{EditAction::*, Editor, Pos, WrapMode};
-        let m = Atari;
+        let m = Atari::default();
         let doc = Document::from_lines(vec![b"AB".to_vec(), b"NEXT".to_vec()], true);
         let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
         let layout = ed.layout(&m, 40, 24);
@@ -112,7 +155,7 @@ mod tests {
     #[test]
     fn clipboard_round_trips_every_code() {
         use retro_core::clipboard::{from_text, to_text};
-        let m = Atari;
+        let m = Atari::default();
         let all: Vec<u8> = (0..=255).filter(|&c| c != atascii::EOL).collect();
         let text = to_text(std::slice::from_ref(&all), &m);
         assert!(text.starts_with('\u{E000}'));
@@ -128,7 +171,7 @@ mod tests {
     #[test]
     fn undo_selection_and_paste() {
         use retro_core::{EditAction::*, Editor, Pos, WrapMode};
-        let m = Atari;
+        let m = Atari::default();
         let doc = Document::from_lines(vec![b"HELLO".to_vec()], true);
         let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
         let layout = ed.layout(&m, 40, 24);
@@ -165,8 +208,27 @@ mod tests {
     }
 
     #[test]
+    fn international_set() {
+        use retro_core::clipboard::{from_text, to_text};
+        let mut m = Atari::default();
+        let heart = m.glyph(0x00);
+        m.set_charset(INTERNATIONAL);
+        assert_ne!(m.glyph(0x00), heart);
+        assert_eq!(m.glyph(b'A'), Atari::default().glyph(b'A'));
+        // Accented letters go to the clipboard as real letters.
+        let line = vec![0x14, b'T', 0x14, 0x94, 0x7B];
+        let text = to_text(std::slice::from_ref(&line), &m);
+        assert_eq!(text, "éTé\u{E194}Ä");
+        assert_eq!(from_text(&text, &m), (vec![line], 0));
+        // Every code still round-trips.
+        let all: Vec<u8> = (0..=255).filter(|&c| c != atascii::EOL).collect();
+        let text = to_text(std::slice::from_ref(&all), &m);
+        assert_eq!(from_text(&text, &m), (vec![all], 0));
+    }
+
+    #[test]
     fn font_has_expected_shapes() {
-        let a = Atari;
+        let a = Atari::default();
         assert_eq!(a.glyph(b' '), [0; 8]);
         // Inverse space is a solid block.
         assert_eq!(a.glyph(0xA0), [0xFF; 8]);

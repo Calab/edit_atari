@@ -69,11 +69,22 @@ pub struct App {
     swallow_text: bool,
     /// Selecting text by dragging with the mouse.
     dragging: bool,
+    /// The character set changed, so the glyph texture must be rebuilt.
+    pub charset_changed: bool,
 }
 
 impl App {
-    pub fn new(spec: AppSpec) -> Self {
+    pub fn new(mut spec: AppSpec) -> Self {
         let config = Config::load(spec.app_id);
+        let charset = config.charset.min(spec.machine.charsets().len() - 1);
+        spec.machine.set_charset(charset);
+        spec.keyboard.set_charset(charset);
+        // The Options menu toggles the second character set, if any.
+        let alt_charset = spec
+            .machine
+            .charsets()
+            .get(1)
+            .map(|name| &*Box::leak(format!("{name} Character Set").into_boxed_str()));
         let editor = Editor::new(
             Document::new(),
             config.wrap,
@@ -89,7 +100,7 @@ impl App {
             overlay: Overlay::None,
             overlay_top: 0,
             prompt: None,
-            menus: menu::menus(),
+            menus: menu::menus(alt_charset),
             menu: MenuState::default(),
             geom: Geometry::default(),
             ratio: 1.0,
@@ -98,6 +109,7 @@ impl App {
             quit_armed: false,
             swallow_text: false,
             dragging: false,
+            charset_changed: false,
         }
     }
 
@@ -309,6 +321,7 @@ impl App {
             ToggleWrap => Some(self.config.wrap == WrapMode::Native),
             ToggleClick => Some(self.config.key_click),
             ToggleControlKey => Some(self.config.control_key == ControlKey::LeftAlt),
+            ToggleCharset => Some(self.spec.machine.charset() != 0),
             _ => None,
         };
         ItemState { enabled, checked }
@@ -413,6 +426,19 @@ impl App {
                 self.message = Some(format!(
                     "CONTROL key is now {}",
                     self.config.control_key.label()
+                ));
+                self.save_config();
+            }
+            ToggleCharset => {
+                let n = self.spec.machine.charsets().len();
+                let next = (self.spec.machine.charset() + 1) % n;
+                self.spec.machine.set_charset(next);
+                self.spec.keyboard.set_charset(next);
+                self.config.charset = next;
+                self.charset_changed = true;
+                self.message = Some(format!(
+                    "{} character set",
+                    self.spec.machine.charsets()[next]
                 ));
                 self.save_config();
             }
@@ -615,6 +641,7 @@ impl App {
             Keycode::F1 => Some(Command::KeyHelp),
             Keycode::F2 => Some(Command::Save),
             Keycode::F4 => Some(Command::ToggleWrap),
+            Keycode::F6 => Some(Command::ToggleCharset),
             Keycode::F7 => Some(Command::ToggleClick),
             Keycode::F8 => Some(Command::ToggleControlKey),
             Keycode::F9 => Some(Command::LineWarning),
@@ -634,6 +661,7 @@ impl App {
             control: atari_ctrl,
         };
         let key = match k {
+            _ if inverse_key => Key::Inverse,
             Keycode::UP => Key::Up,
             Keycode::DOWN => Key::Down,
             Keycode::LEFT => Key::Left,
@@ -648,7 +676,8 @@ impl App {
             Keycode::INSERT => Key::Insert,
             Keycode::TAB => Key::Tab,
             Keycode::ESCAPE => Key::Escape,
-            Keycode::F6 => Key::Inverse,
+            // Caps Lock is handled by the OS but clicks like an Atari key.
+            Keycode::CAPSLOCK => return true,
             other => {
                 let code = other.into_i32();
                 let printable = (0x20..0x7F).contains(&code);

@@ -16,7 +16,7 @@ use retro_core::KeyboardRules;
 use retro_core::Machine;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
 use sdl2::event::{Event, WindowEvent};
-use sdl2::keyboard::{Keycode, Scancode};
+use sdl2::keyboard::Scancode;
 use sdl2::mouse::MouseButton;
 
 pub use config::{Config, ControlKey};
@@ -161,7 +161,6 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     // The key left of 1 (`/~ on US keyboards) is the Atari
                     // inverse key, wherever the layout puts its symbols.
                     let inverse_key = scancode == Some(Scancode::Grave);
-                    let k = if inverse_key { Keycode::F6 } else { k };
                     let clicked = app.key_down(k, keymod, inverse_key, &ctx);
                     if clicked
                         && app.config.key_click
@@ -202,6 +201,9 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             }
         }
 
+        if std::mem::take(&mut app.charset_changed) {
+            atlas = render::build_atlas(&creator, app.spec.machine.as_ref())?;
+        }
         let frame = app.frame(canvas.output_size()?);
         app.draw(&mut canvas, &mut atlas, &mut font, &frame, &clipboard);
         if let Some(path) = std::env::var_os("RETRO_EDITOR_SNAPSHOT") {

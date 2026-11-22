@@ -31,9 +31,14 @@ const HELP: &[&str] = &[
     "Tab stops start at screen columns 7, 15,",
     "23, 31 and 39 of each row, as at power-up.",
     "",
-    "The ` key is the Atari inverse key. Keys",
-    "with no Atari equivalent ({ } ~) are",
-    "ignored.",
+    "The ` key (left of 1) is the Atari inverse key.",
+    "Keys with no Atari equivalent ({ } ~) are ignored.",
+    "",
+    "F6 switches to the XL/XE international character",
+    "set: accented letters replace the graphics at",
+    "$00-$1A, $60 and $7B. With it on, accented letters",
+    "typed on the PC keyboard (e.g. é, ñ, ü) are",
+    "inserted as their Atari codes.",
 ];
 
 fn about() -> &'static str {
@@ -58,7 +63,7 @@ fn main() -> ExitCode {
     let spec = AppSpec {
         title: "Atari Editor",
         app_id: "atari_editor",
-        machine: Box::new(Atari),
+        machine: Box::new(Atari::default()),
         keyboard: Box::new(AtariKeyboard::new()),
         click: atari::click::key_click,
         // Default Atari text screen: COLOR2 $94 background, COLOR1 $CA
@@ -68,6 +73,8 @@ fn main() -> ExitCode {
             foreground: (0x8C, 0xC4, 0xFF),
             border: (0x00, 0x00, 0x00),
             warning: (0xFF, 0xA8, 0x40),
+            selection: (0xF2, 0xC8, 0x4B),
+            selection_text: (0x10, 0x1C, 0x40),
         },
         file_types: (
             "Atari text files",

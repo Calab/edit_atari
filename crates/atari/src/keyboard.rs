@@ -18,6 +18,9 @@ pub struct AtariKeyboard {
     pub escape_pending: bool,
     /// Inverse video is on for typed characters.
     pub inverse: bool,
+    /// The international character set is in use, so accented letters
+    /// typed on the PC keyboard map to their international-set codes.
+    pub international: bool,
 }
 
 /// ATASCII code for a printable PC character, or `None` if the Atari has no
@@ -90,7 +93,9 @@ impl AtariKeyboard {
         }
 
         match key {
-            Key::Char(c) => printable(c).map_or(EditAction::None, |b| self.typed(b)),
+            Key::Char(c) => printable(c)
+                .or_else(|| self.international.then(|| international_code(c)).flatten())
+                .map_or(EditAction::None, |b| self.typed(b)),
             Key::Control(c) => match c {
                 '-' => EditAction::MoveUp,
                 '=' => EditAction::MoveDown,
@@ -130,6 +135,10 @@ impl AtariKeyboard {
 impl KeyboardRules for AtariKeyboard {
     fn handle(&mut self, input: KeyInput) -> EditAction {
         AtariKeyboard::handle(self, input)
+    }
+
+    fn set_charset(&mut self, index: usize) {
+        self.international = index == 1;
     }
 
     fn indicators(&self) -> Vec<&'static str> {
@@ -172,6 +181,16 @@ mod tests {
         assert_eq!(press(&mut kb, Control('.')), EditAction::Insert(0x60));
         assert_eq!(press(&mut kb, Control(';')), EditAction::Insert(0x7B));
         assert_eq!(press(&mut kb, Control('-')), EditAction::MoveUp);
+    }
+
+    #[test]
+    fn accented_letters_need_the_international_set() {
+        let mut kb = AtariKeyboard::new();
+        assert_eq!(press(&mut kb, Char('é')), EditAction::None);
+        kb.set_charset(1);
+        assert_eq!(press(&mut kb, Char('é')), EditAction::Insert(0x14));
+        assert_eq!(press(&mut kb, Char('Ä')), EditAction::Insert(0x7B));
+        assert_eq!(press(&mut kb, Char('A')), EditAction::Insert(b'A'));
     }
 
     #[test]
