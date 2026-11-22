@@ -22,7 +22,7 @@ use sdl2::keyboard::Scancode;
 use sdl2::mouse::MouseButton;
 
 pub use config::{Config, ControlKey};
-use render::Palette;
+use render::{ColorModel, Palette};
 
 /// Everything that makes an editor specific to one machine.
 pub struct AppSpec {
@@ -35,6 +35,9 @@ pub struct AppSpec {
     /// Generates the key-click sound: (sample rate, volume) -> mono samples.
     pub click: fn(u32, f32) -> Vec<f32>,
     pub palette: Palette,
+    /// Selectable text/background colours and attract mode, if the machine
+    /// has a colour model. Without one, `palette` is used as is.
+    pub colors: Option<ColorModel>,
     /// File-dialog filter: (description, extensions without dots).
     pub file_types: (&'static str, &'static [&'static str]),
     /// Machine-specific lines appended to the help screen. A run of two or
@@ -147,6 +150,9 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.menu.context = Some((x, y));
     }
+    if std::env::var_os("RETRO_EDITOR_ATTRACT").is_some() {
+        app.test_attract();
+    }
     if let Some(n) = std::env::var("RETRO_EDITOR_SELECT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -160,10 +166,21 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         // something happens (the Atari cursor doesn't blink).
         // While a file dialog is open, wake up regularly to check for its
         // answer.
+        // Sleep until something happens, waking for a pending file dialog's
+        // answer or for attract mode.
+        let wake = [
+            app.file_job_pending()
+                .then_some(std::time::Duration::from_millis(50)),
+            app.next_wakeup(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let mut pending = if first_frame {
             Vec::new()
-        } else if app.file_job_pending() {
-            events.wait_event_timeout(50).into_iter().collect()
+        } else if let Some(d) = wake {
+            let ms = d.as_millis().clamp(1, u128::from(u32::MAX)) as u32;
+            events.wait_event_timeout(ms).into_iter().collect()
         } else {
             vec![events.wait_event()]
         };
@@ -172,6 +189,16 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         pending.extend(events.poll_iter());
 
         for event in pending {
+            if matches!(
+                event,
+                Event::KeyDown { .. }
+                    | Event::TextInput { .. }
+                    | Event::MouseButtonDown { .. }
+                    | Event::MouseMotion { .. }
+                    | Event::MouseWheel { .. }
+            ) {
+                app.activity();
+            }
             let frame = app.frame(canvas.output_size()?);
             let ctx = app::Ctx {
                 clipboard: &clipboard,
@@ -236,6 +263,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             }
         }
 
+        app.tick();
         if std::mem::take(&mut app.charset_changed) {
             atlas = render::build_atlas(&creator, app.spec.machine.as_ref())?;
         }

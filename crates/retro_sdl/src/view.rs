@@ -9,7 +9,7 @@ use sdl2::video::Window;
 
 use crate::app::{App, Frame, Overlay};
 use crate::menu::{self, THEME};
-use crate::render::{Grid, rgb};
+use crate::render::Grid;
 use crate::ui_font::UiFont;
 
 impl App {
@@ -21,14 +21,14 @@ impl App {
         f: &Frame,
         clipboard: &ClipboardUtil,
     ) {
-        let pal = self.spec.palette;
-        canvas.set_draw_color(rgb(pal.border));
+        let colors = self.screen_colors();
+        canvas.set_draw_color(colors.border);
         canvas.clear();
 
         if self.overlay == Overlay::None {
             // The machine's screen: text area background, then the text.
             let screen_cols = f.layout.left_margin + f.layout.text_cols;
-            canvas.set_draw_color(rgb(pal.background));
+            canvas.set_draw_color(colors.background);
             let _ = canvas.fill_rect(Rect::new(
                 f.origin_x,
                 f.text_top,
@@ -86,9 +86,9 @@ impl App {
     }
 
     fn draw_text(&self, grid: &mut Grid, f: &Frame) {
-        let pal = self.spec.palette;
-        let (fg, bg, warn) = (rgb(pal.foreground), rgb(pal.background), rgb(pal.warning));
-        let (sel_bg, sel_fg) = (rgb(pal.selection), rgb(pal.selection_text));
+        let c = self.screen_colors();
+        let (fg, bg, warn) = (c.text, c.background, c.warning);
+        let (sel_bg, sel_fg) = (c.selection, c.selection_text);
         let layout = &f.layout;
         let doc = &self.editor.doc;
         let w = layout.text_cols;

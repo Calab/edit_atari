@@ -20,6 +20,25 @@ pub struct Palette {
     pub selection_text: (u8, u8, u8),
 }
 
+/// A machine's selectable colours as a grid of hues x luminances (the
+/// Atari's SETCOLOR model; a machine with a plain list of colours can use
+/// one luminance).
+#[derive(Clone, Copy)]
+pub struct ColorModel {
+    pub hues: u8,
+    pub lums: u8,
+    /// How luminance is numbered for display (2 on the Atari: 0, 2 ... 14).
+    pub lum_step: u8,
+    pub rgb: fn(u8, u8) -> (u8, u8, u8),
+    /// The colour's name in the machine's terms, e.g. "$94".
+    pub label: fn(u8, u8) -> String,
+    /// Attract-mode colour: (hue, lum) transformed by a changing value.
+    pub attract: fn((u8, u8), u8) -> (u8, u8),
+    pub default_text: (u8, u8),
+    pub default_background: (u8, u8),
+    pub border: (u8, u8),
+}
+
 pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {
     Color::RGB(r, g, b)
 }

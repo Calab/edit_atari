@@ -12,16 +12,23 @@ use sdl2::video::Window;
 use crate::menu::THEME;
 use crate::ui_font::UiFont;
 
-/// The controls, in Tab order.
+/// The controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Wrap,
     Zoom,
+    FgHue,
+    FgLum,
+    BgHue,
+    BgLum,
+    ResetColors,
     Charset,
     Click,
     ControlKey,
     WarnOn,
     WarnCol,
+    AttractOn,
+    AttractMin,
     DirMode,
     DirPath,
     Browse,
@@ -30,21 +37,21 @@ pub enum Field {
     Close,
 }
 
-pub const ORDER: [Field; 13] = [
-    Field::Wrap,
-    Field::Zoom,
-    Field::Charset,
-    Field::Click,
-    Field::ControlKey,
-    Field::WarnOn,
-    Field::WarnCol,
-    Field::DirMode,
-    Field::DirPath,
-    Field::Browse,
-    Field::SaveOnExit,
-    Field::SaveNow,
-    Field::Close,
-];
+/// The controls in Tab order. Colour controls only appear when the
+/// machine has a colour model.
+fn order(colors: bool) -> Vec<Field> {
+    use Field::*;
+    let mut v = vec![Wrap, Zoom];
+    if colors {
+        v.extend([FgHue, FgLum, BgHue, BgLum, ResetColors]);
+    }
+    v.extend([Charset, Click, ControlKey, WarnOn, WarnCol]);
+    if colors {
+        v.extend([AttractOn, AttractMin]);
+    }
+    v.extend([DirMode, DirPath, Browse, SaveOnExit, SaveNow, Close]);
+    v
+}
 
 /// What clicking a spot does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,27 +80,45 @@ pub struct View<'a> {
     pub dir_fixed: bool,
     pub dir_path: &'a str,
     pub save_on_exit: bool,
+    pub colors: Option<ColorView>,
+    pub attract_on: bool,
+    pub attract_min: u32,
 }
 
-#[derive(Default)]
+/// The text and background colour choices.
+pub struct ColorView {
+    /// (hue, luminance as displayed, colour, label such as "$94").
+    pub text: (u8, u8, Color, String),
+    pub background: (u8, u8, Color, String),
+}
+
 pub struct Prefs {
-    /// Index into [`ORDER`].
-    pub focus: usize,
+    order: Vec<Field>,
+    /// Index into `order`.
+    focus: usize,
     /// Clickable spots from the last draw.
     hits: Vec<(Rect, Field, Op)>,
 }
 
 impl Prefs {
+    pub fn new(colors: bool) -> Self {
+        Self {
+            order: order(colors),
+            focus: 0,
+            hits: Vec::new(),
+        }
+    }
+
     pub fn focused(&self) -> Field {
-        ORDER[self.focus]
+        self.order[self.focus]
     }
 
     pub fn focus_on(&mut self, f: Field) {
-        self.focus = ORDER.iter().position(|&o| o == f).unwrap_or(0);
+        self.focus = self.order.iter().position(|&o| o == f).unwrap_or(0);
     }
 
     pub fn move_focus(&mut self, dir: isize) {
-        let n = ORDER.len() as isize;
+        let n = self.order.len() as isize;
         self.focus = (self.focus as isize + dir).rem_euclid(n) as usize;
     }
 
@@ -119,22 +144,45 @@ impl Prefs {
         canvas.set_blend_mode(BlendMode::NONE);
 
         let lh = font.line_height();
-        let row = lh + pad * 3;
-        let labels = [
-            "Display width",
-            "Zoom",
-            "Character set",
-            "Key click",
-            "CONTROL key",
-            "Line length warning",
-            "Default folder",
-            "",
-            "Preferences",
-        ];
-        let label_w = labels.iter().map(|l| font.measure(l)).max().unwrap_or(0);
-        let w = (label_w + pad * 90).min(width as i32 - pad * 4);
+        let row = lh + pad * 2 + pad / 2;
+        #[derive(PartialEq)]
+        enum Row {
+            Wrap,
+            Zoom,
+            Text,
+            Background,
+            Charset,
+            Click,
+            ControlKey,
+            Warn,
+            Attract,
+            Dir,
+            DirPath,
+            Save,
+        }
+        let mut rows = vec![("Display width", Row::Wrap), ("Zoom", Row::Zoom)];
+        if v.colors.is_some() {
+            rows.push(("Text color", Row::Text));
+            rows.push(("Background color", Row::Background));
+        }
+        rows.extend([
+            ("Character set", Row::Charset),
+            ("Key click", Row::Click),
+            ("CONTROL key", Row::ControlKey),
+            ("Line length warning", Row::Warn),
+        ]);
+        if v.colors.is_some() {
+            rows.push(("Attract mode", Row::Attract));
+        }
+        rows.extend([
+            ("Default folder", Row::Dir),
+            ("", Row::DirPath),
+            ("Preferences", Row::Save),
+        ]);
+        let label_w = rows.iter().map(|(l, _)| font.measure(l)).max().unwrap_or(0);
+        let w = (label_w + pad * 112).min(width as i32 - pad * 4);
         let title_h = lh + pad * 2;
-        let h = title_h + pad * 2 + row * labels.len() as i32 + pad * 3 + lh + pad * 6;
+        let h = title_h + pad * 2 + row * rows.len() as i32 + pad * 3 + lh + pad * 6;
         let x0 = (width as i32 - w) / 2;
         let y0 = ((height as i32 - h) / 2).max(0);
 
@@ -162,10 +210,10 @@ impl Prefs {
         let lx = x0 + pad * 4;
         let cx = lx + label_w + pad * 6;
         let mut y = y0 + title_h + pad * 3;
-        for (i, label) in labels.iter().enumerate() {
+        for (label, r) in &rows {
             ui.font.draw(ui.canvas, lx, y, label, t.text);
-            match i {
-                0 => {
+            match r {
+                Row::Wrap => {
                     ui.choice(
                         Field::Wrap,
                         cx,
@@ -174,16 +222,28 @@ impl Prefs {
                         usize::from(!v.native),
                     );
                 }
-                1 => {
+                Row::Zoom => {
                     ui.spinner(Field::Zoom, cx, y, &format!("{}x", v.scale), 3);
                 }
-                2 => {
+                Row::Text | Row::Background => {
+                    let c = v.colors.as_ref().expect("row only shown with colours");
+                    let (fields, (hue, lum, color, name)) = if *r == Row::Text {
+                        ((Field::FgHue, Field::FgLum), &c.text)
+                    } else {
+                        ((Field::BgHue, Field::BgLum), &c.background)
+                    };
+                    let end = ui.color_row(cx, y, fields, *hue, *lum, *color, name);
+                    if *r == Row::Background {
+                        ui.button(Field::ResetColors, end + pad * 4, y, "Default Colors");
+                    }
+                }
+                Row::Charset => {
                     ui.choice(Field::Charset, cx, y, v.charsets, v.charset);
                 }
-                3 => {
+                Row::Click => {
                     ui.checkbox(Field::Click, cx, y, "On", v.key_click);
                 }
-                4 => {
+                Row::ControlKey => {
                     ui.choice(
                         Field::ControlKey,
                         cx,
@@ -192,7 +252,7 @@ impl Prefs {
                         usize::from(v.left_alt),
                     );
                 }
-                5 => {
+                Row::Warn => {
                     let after = ui.checkbox(Field::WarnOn, cx, y, "On", v.warn_on);
                     let x = after + pad * 4;
                     let lw = ui.font.draw(ui.canvas, x, y, "after column", t.text);
@@ -203,7 +263,20 @@ impl Prefs {
                     };
                     ui.spinner(Field::WarnCol, x + lw + pad * 2, y, &col, 4);
                 }
-                6 => {
+                Row::Attract => {
+                    let after = ui.checkbox(Field::AttractOn, cx, y, "On", v.attract_on);
+                    let x = after + pad * 4;
+                    let lw = ui.font.draw(ui.canvas, x, y, "after", t.text);
+                    let n = if v.attract_min == 0 {
+                        String::new()
+                    } else {
+                        v.attract_min.to_string()
+                    };
+                    let end = ui.spinner(Field::AttractMin, x + lw + pad * 2, y, &n, 2);
+                    ui.font
+                        .draw(ui.canvas, end + pad * 2, y, "minutes without input", t.text);
+                }
+                Row::Dir => {
                     ui.choice(
                         Field::DirMode,
                         cx,
@@ -212,13 +285,13 @@ impl Prefs {
                         usize::from(v.dir_fixed),
                     );
                 }
-                7 => {
+                Row::DirPath => {
                     let bw = ui.font.measure("Browse...") + pad * 4;
                     let fw = x0 + w - pad * 4 - cx - bw - pad * 2;
                     ui.text_field(Field::DirPath, cx, y, fw, v.dir_path);
                     ui.button(Field::Browse, cx + fw + pad * 2, y, "Browse...");
                 }
-                8 => {
+                Row::Save => {
                     ui.checkbox(
                         Field::SaveOnExit,
                         cx,
@@ -227,7 +300,6 @@ impl Prefs {
                         v.save_on_exit,
                     );
                 }
-                _ => {}
             }
             y += row;
         }
@@ -382,7 +454,7 @@ impl Ui<'_, '_, '_> {
     }
 
     /// [-] value [+], the value box `chars` digits wide.
-    fn spinner(&mut self, f: Field, x: i32, y: i32, value: &str, chars: usize) {
+    fn spinner(&mut self, f: Field, x: i32, y: i32, value: &str, chars: usize) -> i32 {
         let t = &THEME;
         let after_minus = self.small_button(f, Op::Dec, x, y, "-");
         let vw = self.font.measure(&"0".repeat(chars)) + self.pad * 3;
@@ -397,6 +469,7 @@ impl Ui<'_, '_, '_> {
         self.hits.push((r, f, Op::Focus));
         let end = self.small_button(f, Op::Inc, r.x() + vw + self.pad, y, "+");
         self.ring(f, x, y, end);
+        end
     }
 
     fn text_field(&mut self, f: Field, x: i32, y: i32, w: i32, text: &str) {
@@ -422,6 +495,34 @@ impl Ui<'_, '_, '_> {
         self.ring(f, x, y, x + w);
     }
 
+    /// Colour sample, hue and luminance spinners, and the colour's name.
+    /// Returns the x after it.
+    #[allow(clippy::too_many_arguments)]
+    fn color_row(
+        &mut self,
+        x: i32,
+        y: i32,
+        (hue_f, lum_f): (Field, Field),
+        hue: u8,
+        lum: u8,
+        color: Color,
+        name: &str,
+    ) -> i32 {
+        let t = &THEME;
+        let sw = self.lh * 2;
+        let swatch = Rect::new(x, y, sw as u32, self.lh as u32);
+        self.canvas.set_draw_color(color);
+        let _ = self.canvas.fill_rect(swatch);
+        self.canvas.set_draw_color(t.border);
+        let _ = self.canvas.draw_rect(swatch);
+        let mut cx = x + sw + self.pad * 3;
+        cx += self.font.draw(self.canvas, cx, y, "Hue", t.text) + self.pad * 2;
+        cx = self.spinner(hue_f, cx, y, &hue.to_string(), 2) + self.pad * 4;
+        cx += self.font.draw(self.canvas, cx, y, "Lum", t.text) + self.pad * 2;
+        cx = self.spinner(lum_f, cx, y, &lum.to_string(), 2) + self.pad * 3;
+        cx + self.font.draw(self.canvas, cx, y, name, t.dim)
+    }
+
     fn button(&mut self, f: Field, x: i32, y: i32, label: &str) {
         let w = self.font.measure(label) + self.pad * 4;
         self.button_w(f, x, y, w, label);
@@ -430,12 +531,8 @@ impl Ui<'_, '_, '_> {
     fn button_w(&mut self, f: Field, x: i32, y: i32, w: i32, label: &str) {
         let t = &THEME;
         let h = self.lh + self.pad * 2;
-        let y = y - if f == Field::Browse { self.pad } else { 0 };
-        let h = if f == Field::Browse {
-            self.lh + self.pad * 2
-        } else {
-            h
-        };
+        let in_row = matches!(f, Field::Browse | Field::ResetColors);
+        let y = y - if in_row { self.pad } else { 0 };
         let r = Rect::new(x, y, w as u32, h as u32);
         let focused = self.focus == f;
         self.canvas

@@ -4,6 +4,7 @@
 pub mod atascii;
 pub mod click;
 pub mod keyboard;
+pub mod palette;
 
 use retro_core::{Decoded, Document, Machine, TabStops};
 

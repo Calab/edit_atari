@@ -54,6 +54,12 @@ pub struct Config {
     pub last_dir: String,
     /// Write the settings file when the program exits.
     pub save_on_exit: bool,
+    /// Text and background colours as (hue, luminance); `None` = default.
+    pub text_color: Option<(u8, u8)>,
+    pub background_color: Option<(u8, u8)>,
+    /// Cycle dim colours after `attract_minutes` without input.
+    pub attract_on: bool,
+    pub attract_minutes: u32,
 }
 
 impl Config {
@@ -88,6 +94,10 @@ impl Default for Config {
             default_dir: String::new(),
             last_dir: String::new(),
             save_on_exit: true,
+            text_color: None,
+            background_color: None,
+            attract_on: true,
+            attract_minutes: DEFAULT_ATTRACT_MINUTES,
         }
     }
 }
@@ -97,6 +107,18 @@ pub const MAX_SCALE: u32 = 8;
 /// The Atari screen editor's logical line: 3 rows of 38 characters.
 pub const DEFAULT_LINE_WARNING: usize = 114;
 pub const MAX_LINE_WARNING: usize = 9999;
+pub const DEFAULT_ATTRACT_MINUTES: u32 = 5;
+pub const MAX_ATTRACT_MINUTES: u32 = 60;
+
+/// "9,2" -> (9, 2).
+fn parse_color(v: &str) -> Option<(u8, u8)> {
+    let (h, l) = v.split_once(',')?;
+    Some((h.trim().parse().ok()?, l.trim().parse().ok()?))
+}
+
+fn color_text(c: Option<(u8, u8)>) -> String {
+    c.map(|(h, l)| format!("{h},{l}")).unwrap_or_default()
+}
 
 impl Config {
     pub fn path(app_id: &str) -> Option<PathBuf> {
@@ -171,6 +193,14 @@ impl Config {
                 "default_dir" => c.default_dir = v.to_string(),
                 "last_dir" => c.last_dir = v.to_string(),
                 "save_on_exit" => c.save_on_exit = v != "off",
+                "text_color" => c.text_color = parse_color(v),
+                "background_color" => c.background_color = parse_color(v),
+                "attract" => c.attract_on = v != "off",
+                "attract_minutes" => {
+                    if let Ok(n) = v.parse::<u32>() {
+                        c.attract_minutes = n.clamp(1, MAX_ATTRACT_MINUTES);
+                    }
+                }
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -201,7 +231,12 @@ impl Config {
              dir_mode = {}\n\
              default_dir = {}\n\
              last_dir = {}\n\
-             save_on_exit = {}\n",
+             save_on_exit = {}\n\
+             # Colours as hue,luminance-level (empty = the machine's default)\n\
+             text_color = {}\n\
+             background_color = {}\n\
+             attract = {}\n\
+             attract_minutes = {}\n",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -223,6 +258,10 @@ impl Config {
             self.default_dir,
             self.last_dir,
             on_off(self.save_on_exit),
+            color_text(self.text_color),
+            color_text(self.background_color),
+            on_off(self.attract_on),
+            self.attract_minutes,
         )
     }
 
@@ -258,6 +297,10 @@ mod tests {
             default_dir: "/home/me/atari files".into(),
             last_dir: "C:\\Atari".into(),
             save_on_exit: false,
+            text_color: Some((12, 7)),
+            background_color: None,
+            attract_on: false,
+            attract_minutes: 9,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }

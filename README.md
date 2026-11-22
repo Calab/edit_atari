@@ -43,9 +43,17 @@ character set is built in.
   S, Z, Y, X, C, V, A), underlined hot keys (Alt+F then Q quits), a
   right-click menu, and the system's own Open and Save dialogs.
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
-  zoom, character set, key click, CONTROL key, line length warning, default
-  folder (last used or a fixed one), and whether to save preferences on
-  exit. Changes apply at once; "Save Preferences" writes them immediately.
+  zoom, text and background colours, character set, key click, CONTROL
+  key, line length warning, attract mode, default folder (last used or a
+  fixed one), and whether to save preferences on exit. Changes apply at
+  once; "Save Preferences" writes them immediately.
+- Colours are chosen the Atari way, by hue (0-15) and luminance (0-14), from
+  an approximation of the NTSC palette; the default is the text screen's
+  $94 background with $9A text.
+- Attract mode: after a few minutes without input (5 by default), the
+  screen colours change every 4.3 seconds exactly as the Atari OS does it
+  (XOR with a changing value, then dimmed with DRKMSK = $F6). Any key press
+  or mouse use restores them.
 - Select text with Shift+arrows or the mouse; selected text is shown in its
   own colour so it isn't confused with inverse characters. Copy and paste work with
   other programs: ordinary characters paste as plain text, and Atari

@@ -1,6 +1,7 @@
 //! Editor state, input handling and commands.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use retro_core::{
     Document, EditAction, Editor, Key, KeyInput, Layout, Mods, Pos, WrapMode, clipboard,
@@ -9,6 +10,21 @@ use sdl2::clipboard::ClipboardUtil;
 use sdl2::keyboard::{Keycode, Mod};
 
 use crate::AppSpec;
+use crate::render::rgb;
+use sdl2::pixels::Color;
+
+/// Attract mode changes colours every 256 frames, as the Atari OS does.
+const ATTRACT_STEP: Duration = Duration::from_millis(4272);
+
+/// The colours of the machine's screen for one frame.
+pub struct ScreenColors {
+    pub text: Color,
+    pub background: Color,
+    pub border: Color,
+    pub warning: Color,
+    pub selection: Color,
+    pub selection_text: Color,
+}
 use crate::dialog::{After, Dialog, Purpose};
 use std::sync::mpsc;
 
@@ -92,6 +108,12 @@ pub struct App {
     dragging: bool,
     /// The character set changed, so the glyph texture must be rebuilt.
     pub charset_changed: bool,
+    /// When the user last pressed a key or used the mouse.
+    last_activity: Instant,
+    /// Attract mode's current colour shift, while it's running.
+    pub attract: Option<u8>,
+    next_attract: Instant,
+    rng: u32,
 }
 
 impl App {
@@ -133,7 +155,109 @@ impl App {
             swallow_text: false,
             dragging: false,
             charset_changed: false,
+            last_activity: Instant::now(),
+            attract: None,
+            next_attract: Instant::now(),
+            rng: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.subsec_nanos() | 1),
         }
+    }
+
+    // ----- colours and attract mode -------------------------------------------
+
+    /// The text and background colours as (hue, lum), if the machine has a
+    /// colour model.
+    pub fn color_choice(&self) -> Option<((u8, u8), (u8, u8))> {
+        let m = self.spec.colors?;
+        let fix = |(h, l): (u8, u8)| (h.min(m.hues - 1), l.min(m.lums - 1));
+        Some((
+            fix(self.config.text_color.unwrap_or(m.default_text)),
+            fix(self.config.background_color.unwrap_or(m.default_background)),
+        ))
+    }
+
+    pub fn screen_colors(&self) -> ScreenColors {
+        let pal = self.spec.palette;
+        let mut c = ScreenColors {
+            text: rgb(pal.foreground),
+            background: rgb(pal.background),
+            border: rgb(pal.border),
+            warning: rgb(pal.warning),
+            selection: rgb(pal.selection),
+            selection_text: rgb(pal.selection_text),
+        };
+        if let (Some(m), Some((text, back))) = (self.spec.colors, self.color_choice()) {
+            let look = |hl: (u8, u8)| {
+                let (h, l) = match self.attract {
+                    Some(shift) => (m.attract)(hl, shift),
+                    None => hl,
+                };
+                rgb((m.rgb)(h, l))
+            };
+            c.text = look(text);
+            c.background = look(back);
+            c.border = look(m.border);
+        }
+        if self.attract.is_some() {
+            let half = |c: Color| Color::RGB(c.r / 2, c.g / 2, c.b / 2);
+            c.warning = half(c.warning);
+            c.selection = half(c.selection);
+            c.selection_text = half(c.selection_text);
+        }
+        c
+    }
+
+    fn attract_delay(&self) -> Option<Duration> {
+        (self.spec.colors.is_some() && self.config.attract_on && self.config.attract_minutes > 0)
+            .then(|| Duration::from_secs(60 * u64::from(self.config.attract_minutes)))
+    }
+
+    /// The user did something: stop attract mode and restart the timer.
+    pub fn activity(&mut self) {
+        self.last_activity = Instant::now();
+        self.attract = None;
+    }
+
+    fn random_byte(&mut self) -> u8 {
+        // xorshift32
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        (x >> 24) as u8
+    }
+
+    /// Start attract mode or move it to its next colours when it's time.
+    pub fn tick(&mut self) {
+        let Some(delay) = self.attract_delay() else {
+            self.attract = None;
+            return;
+        };
+        let now = Instant::now();
+        if now >= self.last_activity + delay && (self.attract.is_none() || now >= self.next_attract)
+        {
+            self.attract = Some(self.random_byte());
+            self.next_attract = now + ATTRACT_STEP;
+        }
+    }
+
+    /// How long the event loop may sleep before attract mode needs it.
+    pub fn next_wakeup(&self) -> Option<Duration> {
+        let delay = self.attract_delay()?;
+        let now = Instant::now();
+        let at = if self.attract.is_some() {
+            self.next_attract
+        } else {
+            self.last_activity + delay
+        };
+        Some(at.saturating_duration_since(now))
+    }
+
+    /// Test hook: start attract mode now.
+    pub fn test_attract(&mut self) {
+        self.attract = Some(self.random_byte());
     }
 
     pub fn set_ui_metrics(&mut self, line_height: i32) {
@@ -436,7 +560,7 @@ impl App {
     pub fn open_prefs(&mut self, focus: Field) {
         self.close_menu();
         self.overlay = Overlay::None;
-        let mut p = Prefs::default();
+        let mut p = Prefs::new(self.spec.colors.is_some());
         p.focus_on(focus);
         self.prefs = Some(p);
     }
@@ -444,6 +568,9 @@ impl App {
     fn close_prefs(&mut self) {
         if self.config.line_warning == 0 {
             self.config.line_warning = config::DEFAULT_LINE_WARNING;
+        }
+        if self.config.attract_minutes == 0 {
+            self.config.attract_minutes = config::DEFAULT_ATTRACT_MINUTES;
         }
         self.prefs = None;
     }
@@ -463,6 +590,20 @@ impl App {
             dir_fixed: self.config.dir_mode == DirMode::Fixed,
             dir_path: &self.config.default_dir,
             save_on_exit: self.config.save_on_exit,
+            colors: self
+                .spec
+                .colors
+                .zip(self.color_choice())
+                .map(|(m, (t, b))| {
+                    let show =
+                        |(h, l): (u8, u8)| (h, l * m.lum_step, rgb((m.rgb)(h, l)), (m.label)(h, l));
+                    prefs::ColorView {
+                        text: show(t),
+                        background: show(b),
+                    }
+                }),
+            attract_on: self.config.attract_on,
+            attract_min: self.config.attract_minutes,
         }
     }
 
@@ -514,11 +655,52 @@ impl App {
                     DirMode::Fixed
                 }
             }
+            (Field::FgHue | Field::FgLum | Field::BgHue | Field::BgLum, Op::Dec | Op::Inc) => {
+                self.step_color(f, op == Op::Inc)
+            }
+            (Field::ResetColors, Op::Press) => {
+                self.config.text_color = None;
+                self.config.background_color = None;
+            }
+            (Field::AttractOn, Op::Toggle) => self.config.attract_on = !self.config.attract_on,
+            (Field::AttractMin, Op::Dec | Op::Inc) => {
+                let d: i64 = if op == Op::Inc { 1 } else { -1 };
+                self.config.attract_minutes = (i64::from(self.config.attract_minutes) + d)
+                    .clamp(1, i64::from(config::MAX_ATTRACT_MINUTES))
+                    as u32;
+            }
             (Field::Browse, Op::Press) => self.start_file_job(FileJobKind::Folder),
             (Field::SaveOnExit, Op::Toggle) => self.config.save_on_exit = !self.config.save_on_exit,
             (Field::SaveNow, Op::Press) => self.save_prefs(),
             (Field::Close, Op::Press) => self.close_prefs(),
             _ => {}
+        }
+    }
+
+    /// Step a hue (wrapping round) or luminance (stopping at the ends).
+    fn step_color(&mut self, f: Field, up: bool) {
+        let (Some(m), Some((text, back))) = (self.spec.colors, self.color_choice()) else {
+            return;
+        };
+        let text_field = matches!(f, Field::FgHue | Field::FgLum);
+        let (mut h, mut l) = if text_field { text } else { back };
+        if matches!(f, Field::FgHue | Field::BgHue) {
+            h = if up {
+                (h + 1) % m.hues
+            } else {
+                (h + m.hues - 1) % m.hues
+            };
+        } else {
+            l = if up {
+                (l + 1).min(m.lums - 1)
+            } else {
+                l.saturating_sub(1)
+            };
+        }
+        if text_field {
+            self.config.text_color = Some((h, l));
+        } else {
+            self.config.background_color = Some((h, l));
         }
     }
 
@@ -529,7 +711,7 @@ impl App {
             return false;
         };
         let f = p.focused();
-        let text_field = matches!(f, Field::DirPath | Field::WarnCol);
+        let text_field = matches!(f, Field::DirPath | Field::WarnCol | Field::AttractMin);
         match k {
             Keycode::TAB => p.move_focus(if shift { -1 } else { 1 }),
             Keycode::UP => p.move_focus(-1),
@@ -548,7 +730,16 @@ impl App {
                         (cur + n - 1) % n
                     };
                     self.prefs_apply(f, Op::Choose(next));
-                } else if matches!(f, Field::Zoom | Field::WarnCol) {
+                } else if matches!(
+                    f,
+                    Field::Zoom
+                        | Field::WarnCol
+                        | Field::AttractMin
+                        | Field::FgHue
+                        | Field::FgLum
+                        | Field::BgHue
+                        | Field::BgLum
+                ) {
                     self.prefs_apply(f, if fwd { Op::Inc } else { Op::Dec });
                 }
             }
@@ -565,6 +756,7 @@ impl App {
                     self.config.default_dir.pop();
                 }
                 Field::WarnCol => self.config.line_warning /= 10,
+                Field::AttractMin => self.config.attract_minutes /= 10,
                 _ => {}
             },
             _ => return !text_field,
@@ -579,6 +771,14 @@ impl App {
             Field::DirPath => {
                 self.config.default_dir.push_str(text);
                 self.config.dir_mode = DirMode::Fixed;
+            }
+            Field::AttractMin => {
+                for d in text.chars().filter_map(|c| c.to_digit(10)) {
+                    let n = self.config.attract_minutes * 10 + d;
+                    if n <= config::MAX_ATTRACT_MINUTES {
+                        self.config.attract_minutes = n;
+                    }
+                }
             }
             Field::WarnCol => {
                 for d in text.chars().filter_map(|c| c.to_digit(10)) {

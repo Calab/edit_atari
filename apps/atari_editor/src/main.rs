@@ -8,8 +8,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use atari::palette;
 use atari::{Atari, keyboard::AtariKeyboard};
-use retro_sdl::{AppSpec, render::Palette};
+use retro_sdl::{
+    AppSpec,
+    render::{ColorModel, Palette},
+};
 
 const HELP: &[&str] = &[
     "ATARI KEYS",
@@ -140,6 +144,17 @@ fn main() -> ExitCode {
                 "lst", "LST", "txt", "TXT", "asm", "ASM", "m65", "M65", "act", "ACT",
             ],
         ),
+        colors: Some(ColorModel {
+            hues: palette::HUES,
+            lums: palette::LUMS,
+            lum_step: 2,
+            rgb: palette::rgb,
+            label: palette::label,
+            attract: palette::attract,
+            default_text: palette::DEFAULT_TEXT,
+            default_background: palette::DEFAULT_BACKGROUND,
+            border: palette::BORDER,
+        }),
         help: HELP,
         about: about(),
         licensing: licensing(),
