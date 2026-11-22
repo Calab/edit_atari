@@ -36,6 +36,12 @@ const STATEMENTS: [&str; 0x60] = [
 const ERROR: u8 = 0x00;
 /// A macro call: the macro's name (a string) follows.
 const MACRO_CALL: u8 = 0x07;
+/// .MACRO: the macro's name (a string) follows.
+const MACRO_DEF: u8 = 0x04;
+const OPT: u8 = 0x0F;
+/// The string quote and the accumulator operand.
+const QUOTE: u8 = 0x41;
+const ACCUMULATOR: u8 = 0x3F;
 /// A comment in the instruction column; the rest is its text (with `;`).
 const COMMENT: u8 = 0x1A;
 /// A comment starting in the first column; the rest is its text.
@@ -165,7 +171,362 @@ impl FileFormat for Mac65 {
             converted_from: None,
         })
     }
+
+    fn can_encode(&self) -> bool {
+        true
+    }
+
+    fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {
+        let (bytes, errors) = encode(doc.lines())?;
+        Ok(retro_core::Encoded {
+            bytes,
+            problem_lines: errors.into_iter().map(u32::from).collect(),
+        })
+    }
 }
+
+/// LIST text back into a SAVE file, and the numbers of lines that didn't
+/// parse (stored as ERROR - lines, as MAC/65 stores them). Blank lines
+/// are skipped; lines are sorted by number, a later line replacing an
+/// earlier one with the same number.
+pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
+    let mut numbered: Vec<(u16, &[u8])> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if line.iter().all(|&c| c == b' ') {
+            continue;
+        }
+        let digits = line.iter().take_while(|c| c.is_ascii_digit()).count();
+        let number = std::str::from_utf8(&line[..digits])
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .ok_or_else(|| format!("line {} of the text has no line number (0-65535)", i + 1))?;
+        numbered.push((number, line));
+    }
+    numbered.sort_by_key(|&(n, _)| n);
+    numbered.reverse();
+    numbered.dedup_by_key(|&mut (n, _)| n); // keeps the later of two equal lines
+    numbered.reverse();
+
+    let mut body = Vec::new();
+    let mut errors = Vec::new();
+    for &(number, line) in &numbered {
+        let tokens = match tokenize_line(line) {
+            Ok(t) => t,
+            Err(at) => {
+                errors.push(number);
+                error_line(line, at)
+            }
+        };
+        let len = tokens.len() + 3;
+        if len > 255 {
+            return Err(format!(
+                "line {number} is too long ({len} bytes; the limit is 255)"
+            ));
+        }
+        body.extend_from_slice(&number.to_le_bytes());
+        body.push(len as u8);
+        body.extend(tokens);
+    }
+    let size = u16::try_from(body.len()).map_err(|_| "program too large".to_string())?;
+    let mut f = vec![0xFE, 0xFE];
+    f.extend_from_slice(&size.to_le_bytes());
+    f.extend(body);
+    Ok((f, errors))
+}
+
+/// Where a line's text starts: after the line number and its space.
+fn text_start(line: &[u8]) -> usize {
+    let digits = line.iter().take_while(|c| c.is_ascii_digit()).count();
+    (digits + 1).min(line.len())
+}
+
+/// An ERROR - line: the text as typed, the character at `at` (an index
+/// into the whole line) in inverse video.
+fn error_line(line: &[u8], at: usize) -> Vec<u8> {
+    let start = text_start(line);
+    let mut text = line[start..].to_vec();
+    let skip = text.iter().take_while(|&&c| c == b' ').count();
+    text.drain(..skip);
+    if let Some(c) = at.checked_sub(start + skip).and_then(|i| text.get_mut(i)) {
+        *c |= 0x80;
+    }
+    let mut v = vec![ERROR];
+    v.extend(text);
+    v
+}
+
+/// Characters that can be part of a name: labels, symbols, macro names
+/// and file names (`D:SYSEQU.M65`).
+fn name_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'@' | b'?' | b'.' | b'_' | b':')
+}
+
+/// A name or string stored as `$80 + length` and its characters.
+fn counted_bytes(s: &[u8]) -> Vec<u8> {
+    let mut v = vec![0x80 + s.len() as u8];
+    v.extend_from_slice(s);
+    v
+}
+
+/// One line as LIST shows it back into tokens; errors are the position
+/// in `line` where parsing failed.
+fn tokenize_line(line: &[u8]) -> Result<Vec<u8>, usize> {
+    let mut i = text_start(line);
+    let mut out = Vec::new();
+    let rest = &line[i..];
+    if rest.starts_with(b"ERROR - ") {
+        // A line LIST showed as an error goes back as one.
+        out.push(ERROR);
+        out.extend_from_slice(&rest[8..]);
+        return Ok(out);
+    }
+    if rest.first() == Some(&b';') {
+        out.push(COMMENT_LINE);
+        out.extend_from_slice(rest);
+        return Ok(out);
+    }
+    // A label starts straight after the line number.
+    if rest.first().is_some_and(|&c| c != b' ') {
+        let n = rest.iter().take_while(|&&c| name_char(c)).count();
+        if n == 0 {
+            return Err(i);
+        }
+        out.extend(counted_bytes(&rest[..n]));
+        i += n;
+    }
+    let skip = |i: &mut usize| {
+        while line.get(*i) == Some(&b' ') {
+            *i += 1;
+        }
+    };
+    skip(&mut i);
+    if i >= line.len() {
+        return Ok(out); // a label on its own
+    }
+    if line[i] == b';' {
+        // A comment in the opcode column: `;`, then the rest of its text
+        // from the comment column.
+        out.push(COMMENT);
+        out.push(b';');
+        i += 1;
+        while i < COMMENT_COLUMN && line.get(i) == Some(&b' ') {
+            i += 1;
+        }
+        out.extend_from_slice(&line[i.min(line.len())..]);
+        return Ok(out);
+    }
+    // The opcode, directive or macro name: up to a space.
+    let start = i;
+    while line.get(i).is_some_and(|&c| c != b' ') {
+        i += 1;
+    }
+    let word = &line[start..i];
+    let token = STATEMENTS
+        .iter()
+        .position(|s| !s.is_empty() && *s != ";" && s.as_bytes().eq_ignore_ascii_case(word))
+        .filter(|&t| t as u8 != ERROR && t as u8 != COMMENT_LINE);
+    match token {
+        Some(t) => out.push(t as u8),
+        None => {
+            if !word.iter().all(|&c| name_char(c)) {
+                return Err(start);
+            }
+            // A macro call: the name, keeping the space after it.
+            out.push(MACRO_CALL);
+            let mut name = word.to_vec();
+            name.push(b' ');
+            out.extend(counted_bytes(&name));
+        }
+    }
+    skip(&mut i);
+    if token == Some(MACRO_DEF as usize) {
+        // .MACRO NAME: the name keeps the space after it too.
+        let start = i;
+        while line.get(i).is_some_and(|&c| name_char(c)) {
+            i += 1;
+        }
+        let mut name = line[start..i].to_vec();
+        name.push(b' ');
+        out.extend(counted_bytes(&name));
+        skip(&mut i);
+    }
+    operand_tokens(line, i, token == Some(OPT as usize), &mut out)?;
+    Ok(out)
+}
+
+/// Operand tokens from `i` to the end of the line.
+fn operand_tokens(line: &[u8], mut i: usize, opt: bool, out: &mut Vec<u8>) -> Result<(), usize> {
+    let mut value_expected = true;
+    let at = |i: usize, s: &[u8]| line[i.min(line.len())..].starts_with(s);
+    while i < line.len() {
+        let c = line[i];
+        if c == b' ' {
+            i += 1;
+            continue;
+        }
+        if c == b';' {
+            out.push(OPERAND_COMMENT);
+            out.extend_from_slice(&line[i..]);
+            return Ok(());
+        }
+        if c == b'"' {
+            // A string: the quote token, the counted text, the quote again.
+            out.push(QUOTE);
+            let start = i + 1;
+            let mut j = start;
+            while j < line.len() && line[j] != b'"' {
+                j += 1;
+            }
+            out.extend(counted_bytes(&line[start..j]));
+            if j < line.len() {
+                out.push(QUOTE);
+                j += 1;
+            }
+            i = j;
+            value_expected = false;
+            continue;
+        }
+        if value_expected {
+            if opt
+                && let Some(&(w, t)) = OPT_WORDS.iter().find(|(w, _)| {
+                    at(i, w.as_bytes()) && !line.get(i + w.len()).is_some_and(|&c| name_char(c))
+                })
+            {
+                out.push(t);
+                i += w.len();
+                // NO goes with the word after it (NO LIST).
+                value_expected = w == "NO";
+                continue;
+            }
+            // Unary and prefix tokens keep a value expected.
+            let prefix = [
+                (&b".NOT"[..], 0x31),
+                (b".DEF", 0x30),
+                (b".REF", 0x2F),
+                (b"%$", 0x0B),
+                (b"%", 0x0C),
+                (b"-", 0x1E),
+                (b"+", 0x12),
+                (b"<", 0x34),
+                (b">", 0x35),
+                (b"[", 0x1F),
+                (b"(", 0x40),
+                (b"#", 0x3E),
+            ];
+            if let Some(&(w, t)) = prefix.iter().find(|(w, _)| at(i, w)) {
+                out.push(t);
+                i += w.len();
+                continue;
+            }
+            if c == b'*' {
+                out.push(0x0D);
+                i += 1;
+            } else if c == b'\'' {
+                out.push(CHAR);
+                out.push(*line.get(i + 1).ok_or(i)?);
+                i += 2;
+            } else if c == b'$' {
+                let start = i + 1;
+                let mut j = start;
+                while line.get(j).is_some_and(|c| c.is_ascii_hexdigit()) {
+                    j += 1;
+                }
+                let v = std::str::from_utf8(&line[start..j])
+                    .ok()
+                    .and_then(|h| u16::from_str_radix(h, 16).ok())
+                    .ok_or(i)?;
+                number(out, v, HEX_BYTE, HEX_WORD);
+                i = j;
+            } else if c.is_ascii_digit() {
+                let start = i;
+                while line.get(i).is_some_and(|c| c.is_ascii_digit()) {
+                    i += 1;
+                }
+                let v: u16 = std::str::from_utf8(&line[start..i])
+                    .ok()
+                    .and_then(|d| d.parse().ok())
+                    .ok_or(start)?;
+                number(out, v, DEC_BYTE, DEC_WORD);
+            } else if name_char(c) {
+                let start = i;
+                while line.get(i).is_some_and(|&c| name_char(c)) {
+                    i += 1;
+                }
+                let name = &line[start..i];
+                if name.eq_ignore_ascii_case(b"A") {
+                    out.push(ACCUMULATOR);
+                } else {
+                    out.extend(counted_bytes(name));
+                }
+            } else {
+                return Err(i);
+            }
+            value_expected = false;
+            continue;
+        }
+        // After a value: index modes, closing brackets and operators.
+        let x_or_y = |s: &[u8]| !line.get(i + s.len()).is_some_and(|&c| name_char(c));
+        let after = [
+            (&b",X)"[..], 0x36, false),
+            (b"),Y", 0x37, false),
+            (b",Y", 0x38, false),
+            (b",X", 0x39, false),
+            (b")", 0x3A, false),
+            (b"]", 0x20, false),
+            (b",", 0x3D, true),
+            (b".AND", 0x32, true),
+            (b".OR", 0x33, true),
+            (b"<=", 0x19, true),
+            (b">=", 0x1A, true),
+            (b"<>", 0x1B, true),
+            (b">", 0x1C, true),
+            (b"<", 0x1D, true),
+            (b"=", 0x18, true),
+            (b"+", 0x12, true),
+            (b"-", 0x13, true),
+            (b"*", 0x14, true),
+            (b"/", 0x15, true),
+            (b"&", 0x16, true),
+            (b"!", 0x24, true),
+            (b"^", 0x25, true),
+            (b"\\", 0x27, true),
+        ];
+        let found = after
+            .iter()
+            .find(|(w, ..)| at(i, w) && (!matches!(*w, b",Y" | b",X") || x_or_y(w)));
+        let Some(&(w, t, value_next)) = found else {
+            return Err(i);
+        };
+        out.push(t);
+        i += w.len();
+        value_expected = value_next;
+    }
+    Ok(())
+}
+
+/// A number as one byte (up to 255) or two.
+fn number(out: &mut Vec<u8>, v: u16, byte: u8, word: u8) {
+    if v <= 255 {
+        out.push(byte);
+        out.push(v as u8);
+    } else {
+        out.push(word);
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// .OPT's words.
+const OPT_WORDS: [(&str, u8); 9] = [
+    ("NO", 0x45),
+    ("OBJ", 0x46),
+    ("ERR", 0x47),
+    ("EJECT", 0x48),
+    ("LIST", 0x49),
+    ("XREF", 0x4A),
+    ("MLIST", 0x4B),
+    ("CLIST", 0x4C),
+    ("NUM", 0x4D),
+];
 
 /// A line number as LIST prints it: in whole bytes of decimal digits, so
 /// an even number of digits (`01`, `0100`, `1000`, `010000`).

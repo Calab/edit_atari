@@ -187,6 +187,15 @@ fn mac65_sources_list() {
         );
     }
     check_listings("MAC-65", &atari::mac65::Mac65);
+    // Written back from their listings, they come out byte for byte.
+    for p in programs("MAC-65") {
+        let bytes = std::fs::read(&p).unwrap();
+        let Ok(d) = atari::mac65::Mac65.decode(&bytes) else {
+            continue;
+        };
+        let (ours, _) = atari::mac65::encode(&d.lines).unwrap();
+        assert!(ours == bytes, "{}: differs when written back", p.display());
+    }
 }
 
 /// Microsoft BASIC programs read as Microsoft BASIC.
