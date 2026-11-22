@@ -545,8 +545,9 @@ impl App {
     /// * The text format's extensions (`.LST`, `.TXT`, `.ASM`...): text.
     /// * Formats that use the extension, as their own or shared (`.TUR`,
     ///   or `.BAS` for every BASIC): the document's format if it's one of
-    ///   them and can be written; otherwise ask which, if any can be
-    ///   written; otherwise say they can't be written yet.
+    ///   them and can be written; else the format whose own extension it
+    ///   is; else ask which, if any can be written; otherwise say they
+    ///   can't be written yet.
     /// * Anything else: the document's format if it can be written, else
     ///   text.
     fn save_as_to(&mut self, path: PathBuf, then: Option<After>) {
@@ -582,8 +583,17 @@ impl App {
             .filter(uses)
             .collect();
         let writable: Vec<_> = users.iter().copied().filter(|f| f.can_encode()).collect();
+        // A format's own extension (.TUR) means that format; a shared one
+        // (.BAS) leaves the choice to the user.
+        let own: Vec<_> = writable
+            .iter()
+            .copied()
+            .filter(|f| f.extensions().iter().any(|x| x.eq_ignore_ascii_case(&ext)))
+            .collect();
         if writable.iter().any(|f| format::same(*f, self.format)) {
             self.save_to(pending(self.format));
+        } else if let [f] = own[..] {
+            self.save_to(pending(f));
         } else if !writable.is_empty() {
             let mut names: Vec<&'static str> = writable.iter().map(|f| f.name()).collect();
             names.push(text.name());

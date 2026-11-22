@@ -16,7 +16,7 @@
 //! `ERROR-` statement holding the text, with the character where the
 //! error was found in inverse video.
 
-use crate::basic::Dialect;
+use crate::basic::{ALTIRRA_EXTENDED_BASIC, Dialect, TURBO_BASIC_XL};
 
 const NUMBER: u8 = 0x0E;
 const STRING: u8 = 0x0F;
@@ -107,6 +107,108 @@ const FUNCTIONS: [(&str, u8, bool); 24] = [
     ("STRIG", 0x54, false),
 ];
 
+/// How a function's arguments are written.
+#[derive(Clone, Copy, PartialEq)]
+enum Args {
+    /// `NAME(...)`: the function token, then the function `(` token.
+    Paren,
+    /// The token's name includes the `(` (`BUMP(`).
+    OwnParen,
+    /// No arguments (`INKEY$`, `TIME`).
+    None,
+}
+
+/// A dialect's grammar: Atari BASIC's, plus what the dialect adds.
+pub(crate) struct Grammar {
+    /// Functions: (name, token, returns a string, arguments). Longest
+    /// names first, and a name with brackets before the same name without.
+    functions: Vec<(&'static str, u8, bool, Args)>,
+    /// Binary operators beyond Atari BASIC's (`DIV`, `&`).
+    operators: Vec<(&'static str, u8)>,
+    /// What can follow `ON expression`.
+    on_targets: Vec<(&'static str, u8)>,
+    /// Variable names may contain `_`.
+    underscore: bool,
+    /// `IF condition` without THEN starts a block.
+    if_without_then: bool,
+    /// Token for a hex constant (`$FF`).
+    hex_number: Option<u8>,
+    /// Token for variables 128 and up (followed by the number - 128).
+    high_variable: Option<u8>,
+    max_variables: usize,
+    /// Statements taking an optional `+` or `-` (TRACE, *B ...).
+    signed: &'static [u8],
+    /// The `--` statement (listed as a line of dashes).
+    dashes: Option<u8>,
+}
+
+pub(crate) fn grammar(d: &Dialect) -> Grammar {
+    let mut g = Grammar {
+        functions: FUNCTIONS
+            .iter()
+            .map(|&(n, t, s)| (n, t, s, Args::Paren))
+            .collect(),
+        operators: Vec::new(),
+        on_targets: vec![("GOTO", GOTO), ("GOSUB", GOSUB)],
+        underscore: false,
+        if_without_then: false,
+        hex_number: None,
+        high_variable: None,
+        max_variables: 128,
+        signed: &[],
+        dashes: None,
+    };
+    if d.extends(&TURBO_BASIC_XL) {
+        g.functions.extend([
+            ("DPEEK", 0x55, false, Args::Paren),
+            ("INSTR", 0x58, false, Args::Paren),
+            ("INKEY$", 0x59, true, Args::None),
+            ("HEX$", 0x5B, true, Args::Paren),
+            ("DEC", 0x5C, false, Args::Paren),
+            ("FRAC", 0x5E, false, Args::Paren),
+            ("TIME$", 0x5F, true, Args::None),
+            ("TIME", 0x60, false, Args::None),
+            ("RND", 0x63, false, Args::None),
+            ("RAND", 0x64, false, Args::Paren),
+            ("TRUNC", 0x65, false, Args::Paren),
+            ("%0", 0x66, false, Args::None),
+            ("%1", 0x67, false, Args::None),
+            ("%2", 0x68, false, Args::None),
+            ("%3", 0x69, false, Args::None),
+            ("UINSTR", 0x6B, false, Args::Paren),
+            ("ERR", 0x6C, false, Args::None),
+            ("ERL", 0x6D, false, Args::None),
+        ]);
+        g.operators = vec![
+            ("&", 0x56),
+            ("!", 0x57),
+            ("EXOR", 0x5A),
+            ("DIV", 0x5D),
+            ("MOD", 0x61),
+        ];
+        g.on_targets.extend([("EXEC", 0x62), ("GO#", 0x6A)]);
+        g.underscore = true;
+        g.if_without_then = true;
+        g.hex_number = Some(0x0D);
+        g.high_variable = Some(0x00);
+        g.max_variables = 256;
+        g.signed = &[0x3B, 0x53, 0x58, 0x5E]; // *F, *L, TRACE, *B
+        g.dashes = Some(0x54);
+    }
+    if d.extends(&ALTIRRA_EXTENDED_BASIC) {
+        g.functions.extend([
+            ("BUMP(", 0x6E, false, Args::OwnParen),
+            ("VSTICK", 0x6F, false, Args::Paren),
+            ("HSTICK", 0x70, false, Args::Paren),
+            ("PMADR", 0x71, false, Args::Paren),
+            ("ERR", 0x72, false, Args::Paren),
+        ]);
+    }
+    g.functions
+        .sort_by_key(|&(name, _, _, args)| (std::cmp::Reverse(name.len()), args != Args::Paren));
+    g
+}
+
 /// A tokenized program.
 #[derive(Debug)]
 pub struct Program {
@@ -156,11 +258,12 @@ pub fn tokenize_with_variables(
         }
     });
 
+    let g = grammar(d);
     let mut vars = Variables { names };
     let mut statements = Vec::new();
     let mut error_lines = Vec::new();
     for &(number, text) in &numbered {
-        let body = match Parser::new(d, text, &mut vars).line() {
+        let body = match Parser::new(d, &g, text, &mut vars).line() {
             Ok(body) => body,
             Err(at) => {
                 error_lines.push(number);
@@ -177,10 +280,11 @@ pub fn tokenize_with_variables(
         statements.push(len as u8);
         statements.extend(body);
     }
-    if vars.names.len() > 128 {
+    if vars.names.len() > g.max_variables {
         return Err(format!(
-            "too many variables ({}; the limit is 128)",
-            vars.names.len()
+            "too many variables ({}; the limit is {})",
+            vars.names.len(),
+            g.max_variables
         ));
     }
     Ok(Program {
@@ -253,7 +357,9 @@ struct Variables {
 }
 
 impl Variables {
-    fn token(&mut self, name: &[u8]) -> Result<u8, ()> {
+    /// A variable's token: `$80` + its number, or for numbers 128 and up
+    /// the grammar's two-byte form.
+    fn token(&mut self, name: &[u8], g: &Grammar) -> Result<Vec<u8>, ()> {
         let i = match self.names.iter().position(|n| n == name) {
             Some(i) => i,
             None => {
@@ -261,11 +367,11 @@ impl Variables {
                 self.names.len() - 1
             }
         };
-        u8::try_from(i)
-            .ok()
-            .filter(|&i| i < 128)
-            .map(|i| FIRST_VARIABLE + i)
-            .ok_or(())
+        match (i, g.high_variable) {
+            (0..128, _) => Ok(vec![FIRST_VARIABLE + i as u8]),
+            (128..256, Some(t)) if i < g.max_variables => Ok(vec![t, (i - 128) as u8]),
+            _ => Err(()),
+        }
     }
 }
 
@@ -273,6 +379,7 @@ impl Variables {
 /// where parsing failed.
 struct Parser<'a, 'v> {
     d: &'a Dialect,
+    g: &'a Grammar,
     s: &'a [u8],
     i: usize,
     out: Vec<u8>,
@@ -282,9 +389,10 @@ struct Parser<'a, 'v> {
 type Fail = usize;
 
 impl<'a, 'v> Parser<'a, 'v> {
-    fn new(d: &'a Dialect, s: &'a [u8], vars: &'v mut Variables) -> Self {
+    fn new(d: &'a Dialect, g: &'a Grammar, s: &'a [u8], vars: &'v mut Variables) -> Self {
         Parser {
             d,
+            g,
             s,
             i: 0,
             out: Vec::new(),
@@ -370,7 +478,15 @@ impl<'a, 'v> Parser<'a, 'v> {
             }
             IF => {
                 self.expression()?;
-                self.expect(b"THEN", THEN)?;
+                if !self.eat(b"THEN") {
+                    if self.g.if_without_then {
+                        // A block IF: the condition, then `:` or the end.
+                        return self.end_of_statement();
+                    }
+                    self.skip_spaces();
+                    return self.fail();
+                }
+                self.out.push(THEN);
                 self.skip_spaces();
                 if self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     self.number()?;
@@ -383,14 +499,37 @@ impl<'a, 'v> Parser<'a, 'v> {
             }
             ON => {
                 self.expression()?;
-                if self.eat(b"GOTO") {
-                    self.out.push(GOTO);
-                } else if self.eat(b"GOSUB") {
-                    self.out.push(GOSUB);
-                } else {
+                let target = self.g.on_targets.iter().find(|(w, _)| {
+                    let save = self.i;
+                    let found = self.eat(w.as_bytes());
+                    self.i = save;
+                    found
+                });
+                let Some(&(word, token)) = target else {
+                    self.skip_spaces();
                     return self.fail();
-                }
+                };
+                self.eat(word.as_bytes());
+                self.out.push(token);
                 self.list()?;
+            }
+            t if Some(t) == self.g.dashes => {
+                self.skip_spaces();
+                return if self.at_end() { Ok(true) } else { self.fail() };
+            }
+            t if self.g.signed.contains(&t) => {
+                self.skip_spaces();
+                match self.peek() {
+                    Some(b'+') => {
+                        self.i += 1;
+                        self.out.push(0x25);
+                    }
+                    Some(b'-') => {
+                        self.i += 1;
+                        self.out.push(0x26);
+                    }
+                    _ => {}
+                }
             }
             DIM | COM => self.dimensions()?,
             _ => self.list()?,
@@ -428,22 +567,38 @@ impl<'a, 'v> Parser<'a, 'v> {
     /// text starts with, as Atari BASIC searches.
     fn statement_keyword(&mut self) -> u8 {
         let rest = &self.s[self.i..];
-        for t in 0..ERROR {
+        let mut best: Option<(u8, usize)> = None;
+        for t in 0..=u8::MAX {
+            if t == IMPLIED_LET || t == ERROR {
+                continue;
+            }
+            if Some(t) == self.g.dashes {
+                // Typed as `--`, listed as a line of dashes.
+                if rest.starts_with(b"--") {
+                    self.i += rest.iter().take_while(|&&c| c == b'-').count();
+                    return t;
+                }
+                continue;
+            }
+            // The longest keyword the text starts with: ENDIF, not END.
             let Some(name) = self.d.statement(t).filter(|n| !n.is_empty()) else {
                 continue;
             };
             let name = name.as_bytes();
-            if rest.starts_with(name) {
-                self.i += name.len();
-                return t;
+            if rest.starts_with(name) && best.is_none_or(|(_, len)| name.len() > len) {
+                best = Some((t, name.len()));
             }
+        }
+        if let Some((t, len)) = best {
+            self.i += len;
+            return t;
         }
         // Abbreviations: a prefix of a keyword, then a period.
         if let Some(dot) = rest.iter().position(|&c| c == b'.')
             && rest[..dot].iter().all(|c| c.is_ascii_uppercase())
         {
             let prefix = &rest[..dot];
-            for t in 0..ERROR {
+            for t in (0..=u8::MAX).filter(|&t| t != IMPLIED_LET && t != ERROR) {
                 if let Some(name) = self.d.statement(t).filter(|n| !n.is_empty())
                     && name.as_bytes().starts_with(prefix)
                 {
@@ -520,10 +675,10 @@ impl<'a, 'v> Parser<'a, 'v> {
     /// brackets are DIM's own. Returns true if the result is a string.
     fn variable(&mut self, in_dim: bool) -> Result<bool, Fail> {
         let start = self.i;
-        while self
-            .peek()
-            .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-        {
+        let underscore = self.g.underscore;
+        while self.peek().is_some_and(|c| {
+            c.is_ascii_uppercase() || c.is_ascii_digit() || (underscore && c == b'_')
+        }) {
             self.i += 1;
         }
         let mut name = self.s[start..self.i].to_vec();
@@ -536,8 +691,8 @@ impl<'a, 'v> Parser<'a, 'v> {
         if subscript && !string {
             name.push(b'(');
         }
-        let token = self.vars.token(&name).or_else(|_| self.fail())?;
-        self.out.push(token);
+        let token = self.vars.token(&name, self.g).or_else(|_| self.fail())?;
+        self.out.extend(token);
         if subscript {
             self.i += 1;
             let paren = match (string, in_dim) {
@@ -595,6 +750,18 @@ impl<'a, 'v> Parser<'a, 'v> {
                 string = false;
                 continue;
             }
+            if let Some(&(op, t)) = self
+                .g
+                .operators
+                .iter()
+                .find(|(op, _)| rest.starts_with(op.as_bytes()))
+            {
+                self.i += op.len();
+                self.out.push(t);
+                self.operand()?;
+                string = false;
+                continue;
+            }
             if rest.starts_with(b"AND") {
                 self.i += 3;
                 self.out.push(AND);
@@ -644,31 +811,67 @@ impl<'a, 'v> Parser<'a, 'v> {
                 self.number()?;
                 Ok(false)
             }
-            Some(c) if c.is_ascii_uppercase() => {
-                if rest.starts_with(b"NOT") {
-                    // NOT binds less tightly than a comparison, so what
-                    // follows decides it: NOT A$="X".
-                    self.i += 3;
-                    self.out.push(NOT);
-                    return self.operand();
-                }
-                for (name, token, string) in FUNCTIONS {
-                    let after = &rest[name.len().min(rest.len())..];
-                    if rest.starts_with(name.as_bytes()) && trim_start(after).first() == Some(&b'(')
-                    {
-                        self.i += name.len();
-                        self.skip_spaces();
-                        self.i += 1;
-                        self.out.push(token);
-                        self.out.push(FUNCTION_PAREN);
-                        self.inside()?;
-                        return Ok(string);
+            Some(b'$') if self.g.hex_number.is_some() => {
+                self.hex()?;
+                Ok(false)
+            }
+            Some(_) if rest.starts_with(b"NOT") => {
+                // NOT binds less tightly than a comparison, so what
+                // follows decides it: NOT A$="X".
+                self.i += 3;
+                self.out.push(NOT);
+                self.operand()
+            }
+            Some(&c) => {
+                let g = self.g;
+                for &(name, token, string, args) in &g.functions {
+                    if !rest.starts_with(name.as_bytes()) {
+                        continue;
                     }
+                    let after = trim_start(&rest[name.len()..]);
+                    if args == Args::Paren && after.first() != Some(&b'(') {
+                        continue;
+                    }
+                    self.i += name.len();
+                    self.out.push(token);
+                    match args {
+                        Args::Paren => {
+                            self.skip_spaces();
+                            self.i += 1;
+                            self.out.push(FUNCTION_PAREN);
+                            self.inside()?;
+                        }
+                        Args::OwnParen => self.inside()?,
+                        Args::None => {}
+                    }
+                    return Ok(string);
                 }
-                self.variable(false)
+                if c.is_ascii_uppercase() {
+                    self.variable(false)
+                } else {
+                    self.fail()
+                }
             }
             _ => self.fail(),
         }
+    }
+
+    /// A hex constant (`$FF`): the hex token, then the value in BCD.
+    fn hex(&mut self) -> Result<(), Fail> {
+        self.i += 1;
+        let start = self.i;
+        while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+            self.i += 1;
+        }
+        let digits = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("");
+        let Ok(value) = u32::from_str_radix(digits, 16) else {
+            return self.fail();
+        };
+        let (bcd, _) = parse_number(value.to_string().as_bytes()).ok_or(self.i)?;
+        self.out
+            .push(self.g.hex_number.expect("checked by the caller"));
+        self.out.extend_from_slice(&bcd);
+        Ok(())
     }
 
     /// A string constant: `"` to `"` (or the end of the line).

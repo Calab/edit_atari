@@ -239,31 +239,42 @@ fn text_languages_open_as_text() {
     }
 }
 
-/// Every Atari BASIC sample, tokenized again from its listing (keeping its
-/// variable order), comes out byte for byte as the original. Programs
-/// whose variable names were mangled by a protection utility (names that
-/// don't end in `$` or `(` though the variable is a string or array) don't
-/// list as valid source, so are skipped.
+/// Every sample, tokenized again from its listing (keeping its variable
+/// order), comes out byte for byte as the original. Programs whose
+/// variable names were mangled by a protection utility (names that don't
+/// end in `$` or `(` though the variable is a string or array) don't list
+/// as valid source, so are skipped.
 #[test]
-fn atari_basic_tokenizes_back_exactly() {
+fn programs_tokenize_back_exactly() {
+    use atari::basic::{ALTIRRA_EXTENDED_BASIC, ATARI_BASIC, TURBO_BASIC_XL};
     use atari::tokenize::{program_parts, tokenize_with_variables};
-    for p in programs("Atari BASIC") {
-        let bytes = std::fs::read(&p).unwrap();
-        if names_mangled(&bytes) {
-            continue;
+    for (dir, dialect, file) in [
+        ("Atari BASIC", &ATARI_BASIC, &ATARI_BASIC_FILE),
+        ("Turbo BASIC XL", &TURBO_BASIC_XL, &TURBO_BASIC_XL_FILE),
+        (
+            "Altirra Extended BASIC",
+            &ALTIRRA_EXTENDED_BASIC,
+            &ALTIRRA_EXTENDED_BASIC_FILE,
+        ),
+    ] {
+        for p in programs(dir) {
+            let bytes = std::fs::read(&p).unwrap();
+            if names_mangled(&bytes) {
+                continue;
+            }
+            let d = file.decode(&bytes).unwrap();
+            let (names, original) = program_parts(&bytes).unwrap();
+            let ours = tokenize_with_variables(dialect, &d.lines, names)
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            assert!(
+                ours.error_lines.is_empty(),
+                "{}: {:?}",
+                p.display(),
+                ours.error_lines
+            );
+            let (_, ours) = program_parts(&ours.bytes).unwrap();
+            assert!(ours == original, "{}: statements differ", p.display());
         }
-        let d = ATARI_BASIC_FILE.decode(&bytes).unwrap();
-        let (names, original) = program_parts(&bytes).unwrap();
-        let ours = tokenize_with_variables(&atari::basic::ATARI_BASIC, &d.lines, names)
-            .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-        assert!(
-            ours.error_lines.is_empty(),
-            "{}: {:?}",
-            p.display(),
-            ours.error_lines
-        );
-        let (_, ours) = program_parts(&ours.bytes).unwrap();
-        assert!(ours == original, "{}: statements differ", p.display());
     }
 }
 

@@ -1,9 +1,12 @@
 //! Read Atari BASIC programs, tokenize their listings again and compare
 //! with the original statement bytes, line by line.
 //!
-//!     cargo run -p atari --example retokenize -- FILE.BAS...
+//!     cargo run -p atari --example retokenize -- [-v] [--as=ab|tb|ax] FILE.BAS...
 
-use atari::basic::{ATARI_BASIC, ATARI_BASIC_FILE};
+use atari::basic::{
+    ALTIRRA_EXTENDED_BASIC, ALTIRRA_EXTENDED_BASIC_FILE, ATARI_BASIC, ATARI_BASIC_FILE,
+    TURBO_BASIC_XL, TURBO_BASIC_XL_FILE,
+};
 use atari::tokenize::{program_parts, tokenize_with_variables};
 use retro_core::FileFormat;
 
@@ -21,14 +24,22 @@ fn lines(p: &[u8]) -> Vec<(u16, &[u8])> {
 
 fn main() {
     let verbose = std::env::args().any(|a| a == "-v");
+    let (dialect, file) = match std::env::args().find(|a| a.starts_with("--as=")).as_deref() {
+        Some("--as=tb") => (&TURBO_BASIC_XL, &TURBO_BASIC_XL_FILE),
+        Some("--as=ax") => (&ALTIRRA_EXTENDED_BASIC, &ALTIRRA_EXTENDED_BASIC_FILE),
+        _ => (&ATARI_BASIC, &ATARI_BASIC_FILE),
+    };
     let (mut files_ok, mut total_lines, mut bad_lines) = (0, 0, 0);
-    for path in std::env::args().skip(1).filter(|a| a != "-v") {
+    for path in std::env::args()
+        .skip(1)
+        .filter(|a| a != "-v" && !a.starts_with("--as="))
+    {
         let bytes = std::fs::read(&path).unwrap();
-        let Ok(d) = ATARI_BASIC_FILE.decode(&bytes) else {
+        let Ok(d) = file.decode(&bytes) else {
             continue;
         };
         let (names, orig) = program_parts(&bytes).unwrap();
-        let p = match tokenize_with_variables(&ATARI_BASIC, &d.lines, names) {
+        let p = match tokenize_with_variables(dialect, &d.lines, names) {
             Ok(p) => p,
             Err(e) => {
                 println!("ERR  {path}: {e}");

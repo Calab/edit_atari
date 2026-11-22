@@ -71,30 +71,34 @@ The editor reads programs as each language saves them, shown as the
 language's own LIST would show them, and plain ATASCII text. Help > File
 Types lists these in the program too.
 
-| Extension | Contents |
-|---|---|
-| `.BAS` | Atari BASIC, tokenized. Any BASIC below may also be saved as `.BAS`: the dialect is recognized from the file itself. |
-| `.TUR` | Turbo-BASIC XL, tokenized |
-| `.ATB` | Altirra BASIC, tokenized |
-| `.AXB` | Altirra Extended BASIC, tokenized |
-| `.BXL` | OSS BASIC XL, tokenized |
-| `.BXE` | OSS BASIC XE, tokenized |
-| `.BAP` | OSS BASIC A+, tokenized |
-| `.AMB` | Microsoft BASIC II, tokenized (including LOCKed programs) |
-| `.M65` | MAC/65 source, tokenized |
-| `.LST` | Program listings (`LIST "D:FILE"`), ATASCII text |
-| `.ASM` | Assembler source (MAC/65, Assembler Editor), ATASCII text |
-| `.LGO` | Atari Logo (Logo's SAVE writes text) |
-| `.PIL` | Atari PILOT (PILOT's SAVE writes text) |
-| `.ACT` | Action! source, ATASCII text |
-| `.TXT` | Other ATASCII text |
+| Extension | Contents                                                  |
+|-----------|-----------------------------------------------------------|
+| `.BAS`    | Atari BASIC, tokenized (see below)                        |
+| `.TUR`    | Turbo-BASIC XL, tokenized                                 |
+| `.ATB`    | Altirra BASIC, tokenized                                  |
+| `.AXB`    | Altirra Extended BASIC, tokenized                         |
+| `.BXL`    | OSS BASIC XL, tokenized                                   |
+| `.BXE`    | OSS BASIC XE, tokenized                                   |
+| `.BAP`    | OSS BASIC A+, tokenized                                   |
+| `.AMB`    | Microsoft BASIC II, tokenized (including LOCKed programs) |
+| `.M65`    | MAC/65 source, tokenized                                  |
+| `.LST`    | Program listings (`LIST "D:FILE"`), ATASCII text          |
+| `.ASM`    | Assembler source (MAC/65, Assembler Editor), ATASCII text |
+| `.LGO`    | Atari Logo (Logo's SAVE writes text)                      |
+| `.PIL`    | Atari PILOT (PILOT's SAVE writes text)                    |
+| `.ACT`    | Action! source, ATASCII text                              |
+| `.TXT`    | Other ATASCII text                                        |
+
+Any BASIC may also be saved as `.BAS`, as was usual at the time: the
+dialect is recognized from the file itself.
 
 - **Opening** reads any of these whatever the file is called. The
   extensions in the table help tell apart dialects that share token numbers
   (Turbo-BASIC XL and BASIC XL, say); File > Reopen As reads a file as
   another format.
-- **Saving**: Atari BASIC programs can be saved tokenized, exactly as Atari
-  BASIC saves them; the other languages are saved as `.LST` text for now.
+- **Saving**: Atari BASIC, Turbo-BASIC XL and Altirra Extended BASIC
+  programs can be saved tokenized, exactly as those BASICs save them; the
+  other languages are saved as `.LST` text for now.
   Save As picks the format from the extension you give, asking which BASIC
   for `.BAS`. File > Save Listing As always saves ATASCII text (a `.LST`
   listing), whatever the name. Lines with syntax errors are saved, if you

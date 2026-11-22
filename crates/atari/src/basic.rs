@@ -116,6 +116,11 @@ impl Dialect {
         }
     }
 
+    /// Whether this dialect is `other` or builds on it.
+    pub(crate) fn extends(&self, other: &Dialect) -> bool {
+        std::ptr::eq(self, other) || self.base.is_some_and(|b| b.extends(other))
+    }
+
     pub(crate) fn is_raw(&self, t: u8) -> bool {
         self.raw_statements.contains(&t) || self.base.is_some_and(|b| b.is_raw(t))
     }
@@ -629,9 +634,11 @@ impl FileFormat for TokenizedBasic {
         self.list(bytes).ok().map(|(_, misfit)| misfit)
     }
 
-    /// Only Atari BASIC has a tokenizer so far.
+    /// The dialects with a tokenizer so far.
     fn can_encode(&self) -> bool {
-        std::ptr::eq(self.dialect, &ATARI_BASIC)
+        [&ATARI_BASIC, &TURBO_BASIC_XL, &ALTIRRA_EXTENDED_BASIC]
+            .iter()
+            .any(|d| std::ptr::eq(self.dialect, *d))
     }
 
     fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {
