@@ -1,0 +1,6 @@
+# Sample files are test data: check them out byte for byte on every system
+# (Git on Windows would otherwise turn LF into CR+LF in the text ones).
+samples/** -text
+
+# Shell scripts run on Linux and macOS.
+*.sh text eol=lf
