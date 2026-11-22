@@ -219,3 +219,22 @@ fn microsoft_basic_programs_list() {
         assert_eq!(mb.decode(&locked).unwrap(), mb.decode(&plain).unwrap());
     }
 }
+
+/// Languages that save plain ATASCII text (Atari Logo, PILOT) open as
+/// text, not mistaken for a tokenized format.
+#[test]
+fn text_languages_open_as_text() {
+    use retro_core::{Machine, format};
+    let formats = atari::Atari::default().formats();
+    for dir in ["Atari Logo", "Atari Pilot"] {
+        for p in programs(dir) {
+            let bytes = std::fs::read(&p).unwrap();
+            assert_eq!(
+                format::detect(formats, &bytes, None).name(),
+                "ATASCII text",
+                "{}",
+                p.display()
+            );
+        }
+    }
+}
