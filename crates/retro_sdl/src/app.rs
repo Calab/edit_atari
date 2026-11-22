@@ -7,9 +7,25 @@ use retro_core::{
 };
 use sdl2::clipboard::ClipboardUtil;
 use sdl2::keyboard::{Keycode, Mod};
-use sdl2::video::Window;
 
 use crate::AppSpec;
+use crate::dialog::{After, Dialog, Purpose};
+use std::sync::mpsc;
+
+/// A file dialog running on another thread.
+struct FileJob {
+    kind: FileJobKind,
+    rx: mpsc::Receiver<Option<PathBuf>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FileJobKind {
+    Open,
+    /// Save As, then optionally carry on with something.
+    SaveAs {
+        then: Option<After>,
+    },
+}
 use crate::config::{self, Config, ControlKey};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 
@@ -18,8 +34,6 @@ pub enum Overlay {
     None,
     Help,
     Licensing,
-    /// Only used if the About box can't be shown as a dialog.
-    About,
 }
 
 /// Pixel layout of the window for one frame.
@@ -39,7 +53,6 @@ pub struct Frame {
 
 /// What commands need from the window system.
 pub struct Ctx<'a> {
-    pub window: &'a Window,
     pub clipboard: &'a ClipboardUtil,
     pub frame: &'a Frame,
 }
@@ -65,9 +78,10 @@ pub struct App {
     /// Interface spacing unit and bar height, in pixels.
     pub pad: i32,
     pub bar_height: i32,
-    /// Quit was requested but a confirmation box couldn't be shown; a second
-    /// request quits.
-    quit_armed: bool,
+    /// The dialog box being shown, if any.
+    pub dialog: Option<Dialog>,
+    /// A file dialog waiting for an answer.
+    file_job: Option<FileJob>,
     /// The last key press was a command, so the text it would type (e.g.
     /// the `` ` `` of the inverse key) must be ignored.
     swallow_text: bool,
@@ -111,7 +125,8 @@ impl App {
             ratio: 1.0,
             pad: 6,
             bar_height: 24,
-            quit_armed: false,
+            dialog: None,
+            file_job: None,
             swallow_text: false,
             dragging: false,
             charset_changed: false,
@@ -200,7 +215,7 @@ impl App {
         self.path = Some(path.to_path_buf());
     }
 
-    fn dialog(&self, title: &str) -> rfd::FileDialog {
+    fn file_dialog(&self, title: &str) -> rfd::FileDialog {
         let (desc, exts) = self.spec.file_types;
         let mut d = rfd::FileDialog::new()
             .set_title(title)
@@ -214,28 +229,70 @@ impl App {
         d
     }
 
-    /// Save to the current file, asking for a name if there isn't one.
-    /// Returns true if the file was saved.
-    fn save(&mut self) -> bool {
-        match self.path.clone() {
-            Some(path) => self.write_to(&path),
-            None => self.save_as(),
+    /// Show an Open or Save As dialog. It runs on its own thread so the
+    /// window keeps responding; [`App::poll_file_job`] picks up the answer.
+    /// (macOS needs dialogs on the main thread, and stays responsive there.)
+    fn start_file_job(&mut self, kind: FileJobKind) {
+        let save = matches!(kind, FileJobKind::SaveAs { .. });
+        let d = if save {
+            self.file_dialog("Save As").set_file_name(self.file_name())
+        } else {
+            self.file_dialog("Open")
+        };
+        let (tx, rx) = mpsc::channel();
+        let run = move || {
+            let _ = tx.send(if save { d.save_file() } else { d.pick_file() });
+        };
+        if cfg!(target_os = "macos") {
+            run();
+        } else {
+            std::thread::spawn(run);
+        }
+        self.file_job = Some(FileJob { kind, rx });
+        self.message = Some("Waiting for the file dialog...".into());
+    }
+
+    pub fn file_job_pending(&self) -> bool {
+        self.file_job.is_some()
+    }
+
+    /// Act on the file dialog's answer once it arrives.
+    pub fn poll_file_job(&mut self) {
+        let Some(job) = &self.file_job else { return };
+        let result = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        let kind = job.kind;
+        self.file_job = None;
+        self.message = None;
+        match (kind, result) {
+            (FileJobKind::Open, Some(path)) => self.open_path(&path),
+            (FileJobKind::SaveAs { then }, Some(path)) => {
+                if self.write_to(&path) {
+                    self.path = Some(path);
+                    if let Some(after) = then {
+                        self.perform(after);
+                    }
+                }
+            }
+            (_, None) => {} // cancelled
         }
     }
 
-    fn save_as(&mut self) -> bool {
-        let Some(path) = self
-            .dialog("Save As")
-            .set_file_name(self.file_name())
-            .save_file()
-        else {
-            return false;
-        };
-        if self.write_to(&path) {
-            self.path = Some(path);
-            true
-        } else {
-            false
+    /// Save to the current file (asking for a name if there isn't one),
+    /// then do `then` if the save worked.
+    fn save(&mut self, then: Option<After>) {
+        match self.path.clone() {
+            Some(path) => {
+                if self.write_to(&path)
+                    && let Some(after) = then
+                {
+                    self.perform(after);
+                }
+            }
+            None => self.start_file_job(FileJobKind::SaveAs { then }),
         }
     }
 
@@ -254,56 +311,43 @@ impl App {
         }
     }
 
-    /// If there are unsaved changes, ask whether to save them. Returns true
-    /// if it's fine to throw the document away.
-    fn confirm_discard(&mut self, window: &Window) -> bool {
-        use sdl2::messagebox::*;
-        if !self.editor.doc.is_modified() {
-            return true;
+    /// Do `after`, first asking to save unsaved changes.
+    fn guard(&mut self, after: After) {
+        if self.editor.doc.is_modified() {
+            self.dialog = Some(Dialog::save_changes(&self.file_name(), after));
+        } else {
+            self.perform(after);
         }
-        let buttons = [
-            ButtonData {
-                flags: MessageBoxButtonFlag::RETURNKEY_DEFAULT,
-                button_id: 0,
-                text: "Save",
-            },
-            ButtonData {
-                flags: MessageBoxButtonFlag::NOTHING,
-                button_id: 1,
-                text: "Don't Save",
-            },
-            ButtonData {
-                flags: MessageBoxButtonFlag::ESCAPEKEY_DEFAULT,
-                button_id: 2,
-                text: "Cancel",
-            },
-        ];
-        let text = format!("Save changes to {}?", self.file_name());
-        match show_message_box(
-            MessageBoxFlag::WARNING,
-            &buttons,
-            self.spec.title,
-            &text,
-            window,
-            None,
-        ) {
-            Ok(ClickedButton::CustomButton(b)) => match b.button_id {
-                0 => self.save(),
-                1 => true,
-                _ => false,
-            },
-            Ok(ClickedButton::CloseButton) => false,
-            Err(_) => {
-                // No message box available: ask for the command twice.
-                if self.quit_armed {
-                    true
-                } else {
-                    self.quit_armed = true;
-                    self.message = Some("Unsaved changes! Repeat to discard them".into());
-                    false
-                }
+    }
+
+    fn perform(&mut self, after: After) {
+        match after {
+            After::New => {
+                self.new_editor(Document::new());
+                self.path = None;
+                self.message = None;
             }
+            After::Open => self.start_file_job(FileJobKind::Open),
+            After::Quit => self.running = false,
         }
+    }
+
+    /// A dialog button was chosen.
+    fn dialog_choose(&mut self, button: usize) {
+        let Some(d) = self.dialog.take() else { return };
+        match d.purpose {
+            Purpose::About => {}
+            Purpose::SaveChanges(after) => match button {
+                0 => self.save(Some(after)),
+                1 => self.perform(after),
+                _ => {}
+            },
+        }
+    }
+
+    /// Show the About box (also used by tests).
+    pub fn show_about(&mut self) {
+        self.dialog = Some(Dialog::about(self.spec.title, &self.spec.about));
     }
 
     fn save_config(&mut self) {
@@ -339,35 +383,15 @@ impl App {
             return;
         }
         let layout = &ctx.frame.layout;
-        if !matches!(c, Quit | New | Open) {
-            self.quit_armed = false;
+        if self.dialog.is_some() || self.file_job.is_some() {
+            return;
         }
         match c {
-            New => {
-                if self.confirm_discard(ctx.window) {
-                    self.new_editor(Document::new());
-                    self.path = None;
-                    self.message = None;
-                }
-            }
-            Open => {
-                if self.confirm_discard(ctx.window)
-                    && let Some(path) = self.dialog("Open").pick_file()
-                {
-                    self.open_path(&path);
-                }
-            }
-            Save => {
-                self.save();
-            }
-            SaveAs => {
-                self.save_as();
-            }
-            Quit => {
-                if self.confirm_discard(ctx.window) {
-                    self.running = false;
-                }
-            }
+            New => self.guard(After::New),
+            Open => self.guard(After::Open),
+            Save => self.save(None),
+            SaveAs => self.start_file_job(FileJobKind::SaveAs { then: None }),
+            Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);
             }
@@ -462,21 +486,7 @@ impl App {
                 self.overlay = Overlay::Licensing;
                 self.overlay_top = 0;
             }
-            About => {
-                use sdl2::messagebox::{MessageBoxFlag, show_simple_message_box};
-                let title = format!("About {}", self.spec.title);
-                if show_simple_message_box(
-                    MessageBoxFlag::INFORMATION,
-                    &title,
-                    &self.spec.about,
-                    ctx.window,
-                )
-                .is_err()
-                {
-                    self.overlay = Overlay::About;
-                    self.overlay_top = 0;
-                }
-            }
+            About => self.show_about(),
         }
     }
 
@@ -550,7 +560,11 @@ impl App {
     /// Typed text (from the OS keyboard layout). Returns true if it
     /// typed anything (and so should click).
     pub fn text_input(&mut self, text: &str, held: Mod, layout: &Layout) -> bool {
-        if std::mem::take(&mut self.swallow_text) || self.menu.is_open() {
+        if std::mem::take(&mut self.swallow_text)
+            || self.menu.is_open()
+            || self.dialog.is_some()
+            || self.file_job.is_some()
+        {
             return false;
         }
         if let Some(input) = &mut self.prompt {
@@ -577,7 +591,6 @@ impl App {
         let action = self.spec.keyboard.handle(input);
         if action != EditAction::None {
             self.message = None;
-            self.quit_armed = false;
         }
         self.editor
             .apply(action, layout, self.spec.machine.as_ref(), input.mods.shift);
@@ -610,6 +623,28 @@ impl App {
         let alt = m.intersects(Mod::LALTMOD | Mod::RALTMOD) && !atari_ctrl;
         let layout = &ctx.frame.layout;
 
+        if self.file_job.is_some() {
+            return false;
+        }
+        if let Some(d) = &mut self.dialog {
+            let n = d.buttons.len();
+            match k {
+                Keycode::LEFT => d.focus = (d.focus + n - 1) % n,
+                Keycode::TAB if shift => d.focus = (d.focus + n - 1) % n,
+                Keycode::RIGHT | Keycode::TAB => d.focus = (d.focus + 1) % n,
+                Keycode::RETURN | Keycode::KP_ENTER | Keycode::SPACE => {
+                    let f = d.focus;
+                    self.dialog_choose(f);
+                }
+                Keycode::ESCAPE => {
+                    let c = d.cancel;
+                    self.dialog_choose(c);
+                }
+                _ => {}
+            }
+            self.swallow_text = true;
+            return false;
+        }
         if self.menu.is_open() {
             self.menu_key(k, ctx);
             self.swallow_text = true;
@@ -769,6 +804,15 @@ impl App {
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32, shift: bool, f: &Frame) {
+        if self.file_job.is_some() {
+            return;
+        }
+        if let Some(d) = &self.dialog {
+            if let Some(b) = d.button_at(x, y) {
+                self.dialog_choose(b);
+            }
+            return;
+        }
         if let Some(i) = self.geom.title_at(x, y) {
             if self.menu.open == Some(i) {
                 self.close_menu();
@@ -803,6 +847,9 @@ impl App {
     /// selection) and open the right-click menu.
     pub fn mouse_right(&mut self, x: i32, y: i32, f: &Frame) {
         self.close_menu();
+        if self.dialog.is_some() || self.file_job.is_some() {
+            return;
+        }
         if self.overlay != Overlay::None
             || self.prompt.is_some()
             || y < f.text_top

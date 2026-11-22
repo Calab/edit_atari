@@ -5,6 +5,7 @@
 
 mod app;
 pub mod config;
+mod dialog;
 pub mod menu;
 pub mod render;
 pub mod ui_font;
@@ -47,6 +48,11 @@ pub struct AppSpec {
 
 /// Open `file` (if given) and run the editor until the user quits.
 pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
+    // Tell the desktop what the program is called (otherwise GNOME shows
+    // "Unknown" in its window list and messages).
+    sdl2::hint::set("SDL_APP_NAME", spec.title);
+    sdl2::hint::set("SDL_VIDEO_X11_WMCLASS", spec.app_id);
+    sdl2::hint::set("SDL_VIDEO_WAYLAND_WMCLASS", spec.app_id);
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
     let mut app = app::App::new(spec);
@@ -121,7 +127,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // RETRO_EDITOR_HELP = help | licensing | about
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
-        Ok("about") => app::Overlay::About,
+        Ok("about") => {
+            app.show_about();
+            app::Overlay::None
+        }
         Ok(_) => app::Overlay::Help,
         Err(_) => app::Overlay::None,
     };
@@ -143,18 +152,22 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     while app.running {
         // Draw the first frame straight away; after that, sleep until
         // something happens (the Atari cursor doesn't blink).
+        // While a file dialog is open, wake up regularly to check for its
+        // answer.
         let mut pending = if first_frame {
             Vec::new()
+        } else if app.file_job_pending() {
+            events.wait_event_timeout(50).into_iter().collect()
         } else {
             vec![events.wait_event()]
         };
+        app.poll_file_job();
         first_frame = false;
         pending.extend(events.poll_iter());
 
         for event in pending {
             let frame = app.frame(canvas.output_size()?);
             let ctx = app::Ctx {
-                window: canvas.window(),
                 clipboard: &clipboard,
                 frame: &frame,
             };

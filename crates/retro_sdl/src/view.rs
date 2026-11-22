@@ -63,6 +63,10 @@ impl App {
             &|c| self.item_state(c, clipboard),
         );
         self.menus = menus;
+
+        if let Some(d) = &mut self.dialog {
+            d.draw(canvas, font, (f.width, f.height), self.pad);
+        }
     }
 
     fn draw_text(&self, grid: &mut Grid, f: &Frame) {
@@ -260,8 +264,7 @@ impl App {
                     None => (None, l.into()),
                 })
                 .collect(),
-            Overlay::Licensing => wrap_text(font, &self.spec.licensing, max_w),
-            _ => wrap_text(font, &self.spec.about, max_w),
+            _ => wrap_text(font, &self.spec.licensing, max_w),
         };
         let key_w = lines
             .iter()
