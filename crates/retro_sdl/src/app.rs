@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use retro_core::{
-    Document, EditAction, Editor, Key, KeyInput, Layout, Mods, Pos, WrapMode, clipboard,
+    Document, EditAction, Editor, FileFormat, Key, KeyInput, Layout, Mods, Pos, WrapMode,
+    clipboard, format,
 };
 use sdl2::clipboard::ClipboardUtil;
 use sdl2::keyboard::{Keycode, Mod};
@@ -81,6 +82,8 @@ pub struct App {
     pub config: Config,
     pub editor: Editor,
     pub path: Option<PathBuf>,
+    /// The format the document was read in (see `retro_core::format`).
+    pub format: &'static dyn FileFormat,
     pub message: Option<String>,
     pub running: bool,
     pub overlay: Overlay,
@@ -130,6 +133,7 @@ impl App {
             .charsets()
             .get(1)
             .map(|name| &*Box::leak(format!("&{name} Character Set").into_boxed_str()));
+        let format = spec.machine.text_format();
         let editor = Editor::new(
             Document::new(),
             config.wrap,
@@ -140,6 +144,7 @@ impl App {
             config,
             editor,
             path: None,
+            format,
             message: None,
             running: true,
             overlay: Overlay::None,
@@ -326,16 +331,43 @@ impl App {
     pub fn open_path(&mut self, path: &Path) {
         match std::fs::read(path) {
             Ok(bytes) => {
-                let d = self.spec.machine.decode(&bytes);
+                let formats = self.spec.machine.formats();
+                let text = self.spec.machine.text_format();
+                let fmt = format::detect(formats, &bytes);
+                let d = match fmt.decode(&bytes) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.message = Some(format!("Can't read {}: {e}", fmt.name()));
+                        return;
+                    }
+                };
                 let mut doc = Document::from_lines(d.lines, d.final_eol);
                 self.message = None;
                 if let Some(from) = d.converted_from {
                     doc.mark_modified();
                     self.message = Some(format!("Converted from {from}; will save as native"));
                 }
+                if !fmt.can_encode() {
+                    self.message = Some(format!(
+                        "{} listing; Save writes a .{} file",
+                        fmt.name(),
+                        text.extension()
+                    ));
+                }
+                // A file another format would have read, but for damage.
+                if format::same(fmt, text)
+                    && let Some(f) = formats
+                        .iter()
+                        .find(|f| !format::same(**f, text) && f.looks_like(&bytes))
+                {
+                    let why = f.decode(&bytes).err().unwrap_or_default();
+                    self.message = Some(format!("Damaged {} file: {why}", f.name()));
+                }
+                self.format = fmt;
                 self.new_editor(doc);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.format = self.spec.machine.text_format();
                 self.new_editor(Document::new());
                 self.message = Some("New file".into());
             }
@@ -381,7 +413,7 @@ impl App {
         let d = match kind {
             FileJobKind::SaveAs { .. } => self
                 .file_dialog("Save As", true)
-                .set_file_name(self.file_name()),
+                .set_file_name(self.save_name()),
             FileJobKind::Open => self.file_dialog("Open", false),
             FileJobKind::Folder => {
                 let mut d = rfd::FileDialog::new().set_title("Default Folder");
@@ -445,10 +477,32 @@ impl App {
         }
     }
 
-    /// Save to the current file (asking for a name if there isn't one),
-    /// then do `then` if the save worked.
+    /// The name Save As suggests: the current name, with the text format's
+    /// extension if the document's own format can't be written.
+    fn save_name(&self) -> String {
+        let name = self.file_name();
+        if self.format.can_encode() {
+            return name;
+        }
+        let ext = self.spec.machine.text_format().extension();
+        let path = Path::new(&name);
+        let old = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        // Keep the old extension's case: PROG.BAS -> PROG.LST, prog.bas -> prog.lst.
+        let ext = if old.chars().any(|c| c.is_ascii_lowercase()) {
+            ext.to_ascii_lowercase()
+        } else {
+            ext.to_string()
+        };
+        path.with_extension(ext).to_string_lossy().into_owned()
+    }
+
+    /// Save to the current file (asking for a name if there isn't one, or
+    /// if its format can't be written), then do `then` if the save worked.
     fn save(&mut self, then: Option<After>) {
         match self.path.clone() {
+            Some(_) if !self.format.can_encode() => {
+                self.start_file_job(FileJobKind::SaveAs { then });
+            }
             Some(path) => {
                 if self.write_to(&path)
                     && let Some(after) = then
@@ -460,10 +514,22 @@ impl App {
         }
     }
 
+    /// Write the document in its format, or as text if its format can't be
+    /// written.
     fn write_to(&mut self, path: &Path) -> bool {
-        let bytes = self.spec.machine.encode(&self.editor.doc);
-        match write_atomically(path, &bytes) {
-            Ok(()) => {
+        let fmt = if self.format.can_encode() {
+            self.format
+        } else {
+            self.spec.machine.text_format()
+        };
+        let written = fmt.encode(&self.editor.doc).and_then(|bytes| {
+            write_atomically(path, &bytes)
+                .map(|()| bytes)
+                .map_err(|e| e.to_string())
+        });
+        match written {
+            Ok(bytes) => {
+                self.format = fmt;
                 self.editor.doc.mark_saved();
                 self.message = Some(format!("Saved {} bytes", bytes.len()));
                 true
@@ -487,6 +553,7 @@ impl App {
     fn perform(&mut self, after: After) {
         match after {
             After::New => {
+                self.format = self.spec.machine.text_format();
                 self.new_editor(Document::new());
                 self.path = None;
                 self.message = None;

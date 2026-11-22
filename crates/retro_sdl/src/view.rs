@@ -200,6 +200,9 @@ impl App {
             parts.push((label.into(), t.highlight));
         }
         let m = &self.spec.machine;
+        if !retro_core::format::same(self.format, m.text_format()) {
+            parts.push((self.format.name().into(), t.text));
+        }
         if m.charset() != 0 {
             parts.push((m.charsets()[m.charset()].into(), t.text));
         }

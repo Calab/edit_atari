@@ -1,6 +1,6 @@
 //! The interface each target computer implements.
 
-use crate::document::Document;
+use crate::format::FileFormat;
 use crate::tabs::TabStops;
 
 /// Result of decoding a file from disk.
@@ -81,9 +81,16 @@ pub trait Machine {
         }
     }
 
-    /// Decode a file's bytes into lines.
-    fn decode(&self, bytes: &[u8]) -> Decoded;
+    /// The file formats the machine reads, most specific first. The last
+    /// is the machine's text format: it accepts any file and is used for
+    /// new documents (see [`crate::format`]).
+    fn formats(&self) -> &'static [&'static dyn FileFormat];
 
-    /// Encode a document back into the machine's native file format.
-    fn encode(&self, doc: &Document) -> Vec<u8>;
+    /// The machine's text format (the last of [`Machine::formats`]).
+    fn text_format(&self) -> &'static dyn FileFormat {
+        *self
+            .formats()
+            .last()
+            .expect("a machine has at least one format")
+    }
 }

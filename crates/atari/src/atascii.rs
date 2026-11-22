@@ -144,6 +144,37 @@ pub fn encode(lines: &[Vec<u8>], final_eol: bool) -> Vec<u8> {
     out
 }
 
+/// ATASCII text with $9B line ends: LIST files, assembler source and so
+/// on. Accepts any file (PC text is converted), so it goes last in the
+/// machine's format list.
+pub struct AtasciiText;
+
+impl retro_core::FileFormat for AtasciiText {
+    fn name(&self) -> &'static str {
+        "ATASCII text"
+    }
+
+    fn extension(&self) -> &'static str {
+        "LST"
+    }
+
+    fn detect(&self, _bytes: &[u8]) -> bool {
+        true
+    }
+
+    fn decode(&self, bytes: &[u8]) -> Result<Decoded, String> {
+        Ok(decode(bytes))
+    }
+
+    fn can_encode(&self) -> bool {
+        true
+    }
+
+    fn encode(&self, doc: &retro_core::Document) -> Result<Vec<u8>, String> {
+        Ok(encode(doc.lines(), doc.final_eol))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

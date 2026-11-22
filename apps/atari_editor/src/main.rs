@@ -139,9 +139,9 @@ fn main() -> ExitCode {
             selection_text: (0x10, 0x1C, 0x40),
         },
         file_types: (
-            "Atari text files",
+            "Atari files",
             &[
-                "lst", "LST", "txt", "TXT", "asm", "ASM", "m65", "M65", "act", "ACT",
+                "lst", "LST", "bas", "BAS", "txt", "TXT", "asm", "ASM", "m65", "M65", "act", "ACT",
             ],
         ),
         colors: Some(ColorModel {
