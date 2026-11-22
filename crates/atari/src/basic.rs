@@ -213,6 +213,42 @@ pub static TURBO_BASIC_XL: Dialect = Dialect {
     },
 };
 
+/// Altirra Extended BASIC: Turbo-BASIC XL plus some Altirra BASIC /
+/// BASIC XL keywords, numbered after Turbo-BASIC's. Tables read from the
+/// atxbasic.bin cartridge image.
+pub static ALTIRRA_EXTENDED_BASIC: Dialect = Dialect {
+    name: "Altirra Extended BASIC",
+    base: Some(&TURBO_BASIC_XL),
+    first_statement: 0x65,
+    statements: &[
+        "LOMEM",
+        "CP",
+        "MISSILE",
+        "PMCLR",
+        "PMCOLOR",
+        "PMGRAPHICS",
+        "PMMOVE", // $65
+    ],
+    raw_statements: &[],
+    first_operator: 0x6E,
+    operators: &["BUMP(", "VSTICK", "HSTICK", "PMADR", "ERR"], // $6E
+    spaced: &[],
+    hex_number: Some(0x0D),
+    high_variable: Some(0x00),
+    mixed_case: false,
+    merge_spaces: false,
+    lowercase_hex: false,
+    indent: Indent::Blocks,
+    // FOR, IF, REPEAT, WHILE, DO, PROC / NEXT, UNTIL, WEND, LOOP, ENDPROC,
+    // ENDIF / ELSE, as Turbo-BASIC XL; indented like BASIC XE.
+    blocks: Blocks {
+        openers: &[0x08, 0x07, 0x3C, 0x3E, 0x45, 0x4F],
+        closers: &[0x09, 0x3D, 0x3F, 0x46, 0x51, 0x41],
+        middles: &[0x40],
+        if_then: (IF, THEN),
+    },
+};
+
 /// OSS BASIC XL: Atari BASIC plus statements from $38 and functions from
 /// $55. Tables read from the BASIC XL 1.02/1.03 cartridge ROMs. END moves
 /// to the end of the statement table ($58) so that the keyword search
@@ -463,6 +499,11 @@ pub static ATARI_BASIC_FILE: TokenizedBasic = TokenizedBasic {
 pub static TURBO_BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &TURBO_BASIC_XL,
     extensions: &["TUR"],
+};
+
+pub static ALTIRRA_EXTENDED_BASIC_FILE: TokenizedBasic = TokenizedBasic {
+    dialect: &ALTIRRA_EXTENDED_BASIC,
+    extensions: &[],
 };
 
 pub static BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
