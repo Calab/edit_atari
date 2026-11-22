@@ -27,8 +27,13 @@ pub const INTERNATIONAL: usize = 1;
 /// The font licence text, for display in the About screen.
 pub const FONT_LICENSE: &str = include_str!("../../../assets/fonts/atari/OFL.txt");
 
-/// File formats, most specific first; plain ATASCII text last.
-static FORMATS: &[&dyn FileFormat] = &[&basic::ATARI_BASIC_FILE, &atascii::AtasciiText];
+/// File formats, most specific first: a Turbo-BASIC XL program that only
+/// uses Atari BASIC's tokens reads as Atari BASIC. Plain ATASCII text last.
+static FORMATS: &[&dyn FileFormat] = &[
+    &basic::ATARI_BASIC_FILE,
+    &basic::TURBO_BASIC_XL_FILE,
+    &atascii::AtasciiText,
+];
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Atari {
