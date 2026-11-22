@@ -574,23 +574,18 @@ impl App {
     /// Returns true if it should click.
     pub fn key_down(&mut self, k: Keycode, m: Mod, inverse_key: bool, ctx: &Ctx) -> bool {
         self.swallow_text = inverse_key;
-        // With NumLock off, the number pad is a second set of cursor keys.
-        let k = if m.contains(Mod::NUMMOD) {
-            k
-        } else {
-            match k {
-                Keycode::KP_8 => Keycode::UP,
-                Keycode::KP_2 => Keycode::DOWN,
-                Keycode::KP_4 => Keycode::LEFT,
-                Keycode::KP_6 => Keycode::RIGHT,
-                Keycode::KP_7 => Keycode::HOME,
-                Keycode::KP_1 => Keycode::END,
-                Keycode::KP_9 => Keycode::PAGEUP,
-                Keycode::KP_3 => Keycode::PAGEDOWN,
-                Keycode::KP_0 => Keycode::INSERT,
-                Keycode::KP_PERIOD => Keycode::DELETE,
-                other => other,
+        // The number pad is a second set of cursor keys when NumLock is off,
+        // or when Shift is held with NumLock on (the standard PC rule). In
+        // the second case Shift is used up by the switch, so it moves the
+        // cursor without selecting, and the digit the OS types is dropped.
+        let shift_mods = Mod::LSHIFTMOD | Mod::RSHIFTMOD;
+        let (k, m) = match numpad_navigation(k) {
+            Some(nav) if !m.contains(Mod::NUMMOD) => (nav, m),
+            Some(nav) if m.intersects(shift_mods) => {
+                self.swallow_text = true;
+                (nav, m & !shift_mods)
             }
+            _ => (k, m),
         };
         let atari_ctrl = m.intersects(self.atari_ctrl_mod());
         let editor_ctrl = m.intersects(Mod::LCTRLMOD) && !atari_ctrl;
@@ -860,6 +855,23 @@ impl App {
         self.editor.click(Pos::default(), false);
         self.editor.click(Pos { line: n, col: 0 }, true);
     }
+}
+
+/// The navigation key a number-pad key gives with NumLock off.
+fn numpad_navigation(k: Keycode) -> Option<Keycode> {
+    Some(match k {
+        Keycode::KP_8 => Keycode::UP,
+        Keycode::KP_2 => Keycode::DOWN,
+        Keycode::KP_4 => Keycode::LEFT,
+        Keycode::KP_6 => Keycode::RIGHT,
+        Keycode::KP_7 => Keycode::HOME,
+        Keycode::KP_1 => Keycode::END,
+        Keycode::KP_9 => Keycode::PAGEUP,
+        Keycode::KP_3 => Keycode::PAGEDOWN,
+        Keycode::KP_0 => Keycode::INSERT,
+        Keycode::KP_PERIOD => Keycode::DELETE,
+        _ => return None,
+    })
 }
 
 /// Write to a temporary file next to `path`, then rename over it, so a
