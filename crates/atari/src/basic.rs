@@ -51,6 +51,9 @@ pub struct Blocks {
     if_then: (u8, u8),
 }
 
+/// A token number a dialect doesn't use, inside the range of its table.
+const INVALID: &str = "\0";
+
 /// IF and THEN in Atari BASIC and most descendants (not BASIC A+).
 const IF: u8 = 0x07;
 const THEN: u8 = 0x1B;
@@ -92,15 +95,25 @@ pub struct Dialect {
 
 impl Dialect {
     fn statement(&self, t: u8) -> Option<&'static str> {
-        t.checked_sub(self.first_statement)
+        match t
+            .checked_sub(self.first_statement)
             .and_then(|i| self.statements.get(i as usize).copied())
-            .or_else(|| self.base?.statement(t))
+        {
+            Some(INVALID) => None,
+            Some(name) => Some(name),
+            None => self.base?.statement(t),
+        }
     }
 
     fn operator(&self, t: u8) -> Option<&'static str> {
-        t.checked_sub(self.first_operator)
+        match t
+            .checked_sub(self.first_operator)
             .and_then(|i| self.operators.get(i as usize).copied())
-            .or_else(|| self.base?.operator(t))
+        {
+            Some(INVALID) => None,
+            Some(name) => Some(name),
+            None => self.base?.operator(t),
+        }
     }
 
     fn is_raw(&self, t: u8) -> bool {
@@ -245,6 +258,65 @@ pub static ALTIRRA_EXTENDED_BASIC: Dialect = Dialect {
         openers: &[0x08, 0x07, 0x3C, 0x3E, 0x45, 0x4F],
         closers: &[0x09, 0x3D, 0x3F, 0x46, 0x51, 0x41],
         middles: &[0x40],
+        if_then: (IF, THEN),
+    },
+};
+
+/// Altirra BASIC (1.x, built into Altirra): Atari BASIC plus a subset of
+/// BASIC XL's keywords, with BASIC XL's token numbers. Tables and LIST
+/// behaviour from its source (src/ATBasic in Altirra: parserbytecode.s,
+/// list.s).
+pub static ALTIRRA_BASIC: Dialect = Dialect {
+    name: "Altirra BASIC",
+    base: Some(&ATARI_BASIC),
+    first_statement: 0x37,
+    statements: &[
+        "Error-  ", // $37: LIST prints "Error-   " and the text as typed
+        INVALID,
+        INVALID,
+        INVALID,
+        INVALID,
+        "ELSE",
+        "ENDIF",
+        "DPOKE",
+        "LOMEM", // $38
+        INVALID,
+        INVALID,
+        INVALID,
+        "BPUT",
+        "BGET",
+        INVALID,
+        "CP",
+        "ERASE", // $40
+        "PROTECT",
+        "UNPROTECT",
+        "DIR",
+        "RENAME",
+        "MOVE",
+        "MISSILE",
+        "PMCLR",
+        "PMCOLOR", // $48
+        "PMGRAPHICS",
+        "PMMOVE", // $50
+    ],
+    raw_statements: &[],
+    first_operator: 0x55,
+    operators: &[
+        INVALID, "%", "!", "&", INVALID, "BUMP(", INVALID, "HEX$", // $55
+        INVALID, "DPEEK", INVALID, "VSTICK", "HSTICK", "PMADR", "ERR", // $5D
+    ],
+    spaced: &[],
+    hex_number: Some(0x0D),
+    high_variable: None,
+    mixed_case: false,
+    merge_spaces: false,
+    lowercase_hex: false,
+    indent: Indent::None,
+    // FOR, IF / NEXT, ENDIF / ELSE (used to choose between dialects)
+    blocks: Blocks {
+        openers: &[0x08, 0x07],
+        closers: &[0x09, 0x3D],
+        middles: &[0x3C],
         if_then: (IF, THEN),
     },
 };
@@ -503,6 +575,11 @@ pub static TURBO_BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
 
 pub static ALTIRRA_EXTENDED_BASIC_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &ALTIRRA_EXTENDED_BASIC,
+    extensions: &[],
+};
+
+pub static ALTIRRA_BASIC_FILE: TokenizedBasic = TokenizedBasic {
+    dialect: &ALTIRRA_BASIC,
     extensions: &[],
 };
 

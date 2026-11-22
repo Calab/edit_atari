@@ -1,6 +1,6 @@
 //! List tokenized BASIC files as text, for checking the detokenizer.
 //!
-//!     cargo run -p atari --example list_bas -- [--as=ab|tb|ax|xl|xe|ap] FILE.BAS...
+//!     cargo run -p atari --example list_bas -- [--as=ab|tb|ax|al|xl|xe|ap] FILE.BAS...
 //!
 //! With one file, prints its listing (PC line endings, ATASCII bytes
 //! above $7F shown as `{$xx}`). With several, prints one summary line each:
@@ -11,7 +11,7 @@ use retro_core::{Machine, format};
 
 fn main() {
     let mut paths: Vec<String> = std::env::args().skip(1).collect();
-    // --as=ab|tb|ax|xl|xe|ap reads every file in that dialect.
+    // --as=ab|tb|ax|al|xl|xe|ap reads every file in that dialect.
     let forced: Option<&'static dyn retro_core::FileFormat> = paths
         .iter()
         .position(|a| a.starts_with("--as="))
@@ -22,6 +22,7 @@ fn main() {
             "xe" => &basic::BASIC_XE_FILE as _,
             "ap" => &basic::BASIC_A_PLUS_FILE as _,
             "ax" => &basic::ALTIRRA_EXTENDED_BASIC_FILE as _,
+            "al" => &basic::ALTIRRA_BASIC_FILE as _,
             other => panic!("unknown dialect {other}"),
         });
     let formats = Atari::default().formats();

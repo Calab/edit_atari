@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use atari::basic::{
-    ALTIRRA_EXTENDED_BASIC_FILE, ATARI_BASIC_FILE, BASIC_A_PLUS_FILE, BASIC_XE_FILE, BASIC_XL_FILE,
-    TURBO_BASIC_XL_FILE,
+    ALTIRRA_BASIC_FILE, ALTIRRA_EXTENDED_BASIC_FILE, ATARI_BASIC_FILE, BASIC_A_PLUS_FILE,
+    BASIC_XE_FILE, BASIC_XL_FILE, TURBO_BASIC_XL_FILE,
 };
 use retro_core::FileFormat;
 
@@ -118,6 +118,7 @@ fn reference_listings_match() {
     check_listings("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE);
     check_listings("OSS BASIC A+", &BASIC_A_PLUS_FILE);
     check_listings("Altirra Extended BASIC", &ALTIRRA_EXTENDED_BASIC_FILE);
+    check_listings("Altirra BASIC", &ALTIRRA_BASIC_FILE);
 }
 
 #[test]
@@ -127,6 +128,7 @@ fn oss_basic_programs_list() {
         ("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE),
         ("OSS BASIC A+", &BASIC_A_PLUS_FILE),
         ("Altirra Extended BASIC", &ALTIRRA_EXTENDED_BASIC_FILE),
+        ("Altirra BASIC", &ALTIRRA_BASIC_FILE),
     ] {
         for p in programs(dir) {
             let bytes = std::fs::read(&p).unwrap();
@@ -150,6 +152,7 @@ fn dialect_detected_from_content() {
         ("OSS BASIC XL-XE/BASIC XE", "BASIC XE"),
         ("OSS BASIC A+", "BASIC A+"),
         ("Altirra Extended BASIC", "Altirra Extended BASIC"),
+        ("Altirra BASIC", "Altirra BASIC"),
     ] {
         for p in programs(dir) {
             let bytes = std::fs::read(&p).unwrap();

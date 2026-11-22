@@ -36,6 +36,7 @@ static FORMATS: &[&dyn FileFormat] = &[
     &basic::ATARI_BASIC_FILE,
     &basic::TURBO_BASIC_XL_FILE,
     &basic::ALTIRRA_EXTENDED_BASIC_FILE,
+    &basic::ALTIRRA_BASIC_FILE,
     &basic::BASIC_XL_FILE,
     &basic::BASIC_XE_FILE,
     &basic::BASIC_A_PLUS_FILE,
