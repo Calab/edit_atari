@@ -403,11 +403,27 @@ impl App {
     }
 
     fn file_dialog(&self, title: &str, for_save: bool) -> rfd::FileDialog {
-        let (desc, exts) = self.spec.file_types;
+        // Each extension in both cases: file names on Atari disks are in
+        // capitals, on a PC often not.
+        let both = |exts: &[&str]| -> Vec<String> {
+            exts.iter()
+                .flat_map(|e| [e.to_ascii_uppercase(), e.to_ascii_lowercase()])
+                .collect()
+        };
+        let all: Vec<&str> = self
+            .spec
+            .file_types
+            .iter()
+            .flat_map(|(_, exts)| exts.iter().copied())
+            .collect();
         let mut d = rfd::FileDialog::new()
             .set_title(title)
-            .add_filter(desc, exts)
-            .add_filter("All files", &["*"]);
+            .add_filter(format!("{} files", self.spec.machine.name()), &both(&all));
+        for (name, exts) in self.spec.file_types {
+            let shown: Vec<String> = exts.iter().map(|e| format!(".{e}")).collect();
+            d = d.add_filter(format!("{name} ({})", shown.join(", ")), &both(exts));
+        }
+        let mut d = d.add_filter("All files", &["*"]);
         // Save As for an existing file starts beside it; otherwise use the
         // default folder from Preferences.
         let beside = self

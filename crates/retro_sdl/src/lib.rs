@@ -38,8 +38,10 @@ pub struct AppSpec {
     /// Selectable text/background colours and attract mode, if the machine
     /// has a colour model. Without one, `palette` is used as is.
     pub colors: Option<ColorModel>,
-    /// File-dialog filter: (description, extensions without dots).
-    pub file_types: (&'static str, &'static [&'static str]),
+    /// File-dialog filters, one per language: (name, extensions without
+    /// dots, in upper case). The dialogs also offer all of them together
+    /// as "Atari files", and "All files".
+    pub file_types: &'static [(&'static str, &'static [&'static str])],
     /// Machine-specific lines appended to the help screen. A run of two or
     /// more spaces separates a key from its description.
     pub help: &'static [&'static str],

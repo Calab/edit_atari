@@ -86,13 +86,15 @@ Types lists these in the program too.
 | `.ASM`    | Assembler source (MAC/65, Assembler Editor), ATASCII text |
 | `.LGO`    | Atari Logo (Logo's SAVE writes text)                      |
 | `.PIL`    | Atari PILOT (PILOT's SAVE writes text)                    |
+| `.FB`     | FastBASIC source, ATASCII text                            |
 | `.ACT`    | Action! source, ATASCII text                              |
 | `.TXT`    | Other ATASCII text                                        |
 
 Any BASIC may also be saved as `.BAS`, as was usual at the time: the
 dialect is recognized from the file itself.
 
-- **Opening** reads any of these whatever the file is called. The
+- **Opening** reads any of these whatever the file is called. The Open
+  and Save dialogs list each language as its own file type. The
   extensions in the table help tell apart dialects that share token numbers
   (Turbo-BASIC XL and BASIC XL, say); File > Reopen As reads a file as
   another format.

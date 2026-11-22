@@ -15,6 +15,26 @@ use retro_sdl::{
     render::{ColorModel, Palette},
 };
 
+/// The Open and Save dialogs' file types, one per language.
+const OPEN_FILTERS: &[(&str, &[&str])] = &[
+    ("Atari BASIC", &["BAS"]),
+    ("Turbo-BASIC XL", &["TUR"]),
+    ("Altirra BASIC", &["ATB"]),
+    ("Altirra Extended BASIC", &["AXB"]),
+    ("BASIC XL", &["BXL"]),
+    ("BASIC XE", &["BXE"]),
+    ("BASIC A+", &["BAP"]),
+    ("Microsoft BASIC II", &["AMB"]),
+    ("FastBASIC", &["FB"]),
+    ("MAC/65", &["M65"]),
+    ("Listings", &["LST"]),
+    ("Assembler source", &["ASM"]),
+    ("Atari Logo", &["LGO"]),
+    ("Atari PILOT", &["PIL"]),
+    ("Action!", &["ACT"]),
+    ("Text", &["TXT"]),
+];
+
 /// Help > File Types: the extensions for each language.
 const FILE_TYPES: &[&str] = &[
     "FILE TYPES",
@@ -39,6 +59,7 @@ const FILE_TYPES: &[&str] = &[
     ".ASM  Assembler source (MAC/65, Assembler Editor)",
     ".LGO  Atari Logo (its SAVE writes text)",
     ".PIL  Atari PILOT (its SAVE writes text)",
+    ".FB   FastBASIC source",
     ".ACT  Action! source",
     ".TXT  Other text",
     "",
@@ -176,14 +197,7 @@ fn main() -> ExitCode {
             selection: (0xF2, 0xC8, 0x4B),
             selection_text: (0x10, 0x1C, 0x40),
         },
-        file_types: (
-            "Atari files",
-            &[
-                "bas", "BAS", "tur", "TUR", "atb", "ATB", "axb", "AXB", "bxl", "BXL", "bxe", "BXE",
-                "bap", "BAP", "amb", "AMB", "m65", "M65", "lst", "LST", "asm", "ASM", "lgo", "LGO",
-                "pil", "PIL", "act", "ACT", "txt", "TXT",
-            ],
-        ),
+        file_types: OPEN_FILTERS,
         colors: Some(ColorModel {
             hues: palette::HUES,
             lums: palette::LUMS,
