@@ -1,0 +1,7 @@
+This is a {INV}TEST{/INV} of the Atari and PC file handling.
+
+There is {INV}inverse{/INV} video in this test.
+
+There are also control characters: {UP}{DOWN}{LEFT}{RIGHT}
+
+and some graphics {CTRL-A}{CTRL-B}{CTRL-C}{CTRL-D}{CTRL-E}{CTRL-F}{CTRL-G}{CTRL-H}

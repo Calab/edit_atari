@@ -106,13 +106,19 @@ dialect is recognized from the file itself.
   listing), whatever the name. Lines with syntax errors are saved, if you
   agree, as `ERROR-` lines, as Atari BASIC itself stores them.
 - **Exporting**: File > Export writes the document as PC text, with the
-  PC's line endings, in one of two forms:
-  - *Unicode*: UTF-8, with printable ASCII as itself and every other Atari
+  PC's line endings, in one of three forms:
+  - *Atari Font*: UTF-8, with printable ASCII as itself and every other Atari
     character in the Unicode Private Use Area (U+E000 + its code), where
     the EightBit Atari font has the Atari characters. Install
     [`assets/fonts/atari/EightBit Atari-Regular.ttf`](assets/fonts/atari/)
     to see them in other programs. The copy and paste uses the same
     characters.
+  - *Standard*: UTF-8 with ordinary Unicode symbols, readable in any font:
+    the symbols the EightBit Atari font itself gives the graphics (heavy
+    box drawing ┣ ━ ┛, blocks ▄ ▌ ▖, ♥ ♣ ♦ ♠, arrows, ◀ ▶, ⤣ for CLEAR).
+    Inverse video has no Unicode equivalent except a few block shapes
+    (inverse space is █); other inverse characters export as normal ones,
+    and Export warns first, saying how many.
   - *ASCII*: plain ASCII, with other characters as tags: `{CTRL-A}` to
     `{CTRL-Z}`, `{CTRL-,}` `{CTRL-.}` `{CTRL-;}`, `{ESC}`, `{UP}` `{DOWN}`
     `{LEFT}` `{RIGHT}`, `{CLEAR}`, `{BACK}`, `{TAB}`, `{DEL LINE}`
@@ -127,6 +133,12 @@ dialect is recognized from the file itself.
   become `?`, and the status bar says how many. Exported files read back
   exactly. The result is a new document: Save asks for a name (suggesting
   `.LST`), so the PC file isn't overwritten.
+
+  If the file is a numbered BASIC or assembler listing with lower case,
+  Import offers to convert it to capitals, which Atari BASIC and the
+  assemblers need. Strings are left as they are, and so are REM and DATA
+  (and the `.` `!` `'` `--` remarks) in BASIC and `;` comments and `'c`
+  constants in assembler.
 
   Open never converts: every byte is read as the Atari's, so a `$9B` is
   always a line end and a PC line feed is a CTRL-J character. If a file

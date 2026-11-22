@@ -20,5 +20,5 @@ pub use editor::Editor;
 pub use format::{Encoded, FileFormat};
 pub use input::{EditAction, Key, KeyInput, KeyboardRules, Mods};
 pub use layout::{Layout, WrapMode};
-pub use machine::{Decoded, Machine};
+pub use machine::{CaseOffer, Decoded, Machine};
 pub use tabs::TabStops;

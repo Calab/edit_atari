@@ -1,0 +1,4 @@
+This is a PC text file.
+
+It should import into the Atari Editor without issues.
+

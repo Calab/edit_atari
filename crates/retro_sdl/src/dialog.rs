@@ -10,7 +10,7 @@ use sdl2::render::{BlendMode, Canvas};
 use sdl2::video::Window;
 
 use crate::menu::THEME;
-use crate::ui_font::UiFont;
+use crate::ui_font::{BOLD, UiFont};
 
 /// What to do after the unsaved changes have been dealt with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,8 +34,13 @@ pub enum Purpose {
     /// Choose the format to save in; the buttons are the formats' names,
     /// then Cancel.
     SaveAsFormat,
-    /// Export as text: 0 = Unicode, 1 = ASCII, 2 = Cancel.
+    /// Export as text: 0 = Atari font, 1 = standard Unicode, 2 = ASCII,
+    /// 3 = Cancel.
     Export,
+    /// Characters won't export exactly: Export Anyway / Cancel.
+    ExportLossy(crate::app::ExportKind),
+    /// After Import: Convert to capitals / Leave As Is.
+    ImportCase,
 }
 
 pub struct Dialog {
@@ -134,24 +139,72 @@ impl Dialog {
         }
     }
 
-    /// Buttons: 0 = Unicode (Atari font), 1 = ASCII with {tags}, 2 = Cancel.
+    /// Buttons: 0 = Atari font, 1 = Standard, 2 = ASCII, 3 = Cancel.
     pub fn export(file_name: &str) -> Self {
         Self {
             purpose: Purpose::Export,
             title: "Export".into(),
             text: format!(
-                "Export {file_name} as PC text:\n\
+                "Export \"{file_name}\" as PC text:\n\
                  \n\
-                 Unicode: UTF-8, the Atari characters shown with\n\
-                 the EightBit Atari font.\n\
-                 ASCII: plain text, other characters as {{tags}}\n\
+                 {BOLD}Atari Font{BOLD}: UTF-8 for the EightBit Atari font;\n\
+                 every character exact.\n\
+                 {BOLD}Standard{BOLD}: UTF-8 with ordinary Unicode symbols,\n\
+                 for any font. Most inverse characters can't be\n\
+                 shown and export as normal ones.\n\
+                 {BOLD}ASCII{BOLD}: plain text, other characters as {{tags}}\n\
                  such as {{CLEAR}}, {{CTRL-A}} and {{INV}}...{{/INV}}.\n\
                  \n\
-                 File > Import reads either kind back."
+                 File > Import reads all three back."
             ),
-            buttons: vec!["Unicode", "ASCII", "Cancel"],
+            buttons: vec!["Atari Font", "Standard", "ASCII", "Cancel"],
             focus: 0,
-            cancel: 2,
+            cancel: 3,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Export Anyway, 1 = Cancel.
+    pub fn export_lossy(kind: crate::app::ExportKind, lost: usize) -> Self {
+        let what = if lost == 1 {
+            "1 character has".to_string()
+        } else {
+            format!("{lost} characters have")
+        };
+        Self {
+            purpose: Purpose::ExportLossy(kind),
+            title: "Export".into(),
+            text: format!(
+                "{what} no standard Unicode equivalent\n\
+                 (inverse video) and will be exported as normal characters.\n\
+                 Exporting in Atari font or ASCII keeps them."
+            ),
+            buttons: vec!["Export Anyway", "Cancel"],
+            focus: 1,
+            cancel: 1,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Convert, 1 = Leave As Is.
+    pub fn import_case(file_name: &str, offer: &retro_core::CaseOffer) -> Self {
+        let lines = if offer.changed == 1 {
+            "1 line".to_string()
+        } else {
+            format!("{} lines", offer.changed)
+        };
+        Self {
+            purpose: Purpose::ImportCase,
+            title: "Import".into(),
+            text: format!(
+                "{file_name} looks like {} with lower case\n\
+                 in {lines}. Convert it to capitals?\n\
+                 {} are left as they are.",
+                offer.what, offer.kept
+            ),
+            buttons: vec!["Convert", "Leave As Is"],
+            focus: 0,
+            cancel: 1,
             button_rects: Vec::new(),
         }
     }
@@ -189,7 +242,7 @@ impl Dialog {
         let title_w = font.measure(&self.title);
         let text_w = lines
             .iter()
-            .map(|l| font.measure(l))
+            .map(|l| font.measure_marked(l))
             .max()
             .unwrap_or(0)
             .max(title_w);
@@ -222,7 +275,7 @@ impl Dialog {
 
         let mut ty = y + title_h + pad * 3;
         for l in &lines {
-            font.draw(canvas, x + pad * 4, ty, l, t.text);
+            font.draw_marked(canvas, x + pad * 4, ty, l, t.text);
             ty += lh;
         }
 

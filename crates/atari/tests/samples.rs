@@ -387,3 +387,35 @@ fn exports_read_back_exactly() {
     }
     eprintln!("{count} files exported and read back");
 }
+
+/// Steve's export test set in `samples/`: an ATASCII file and its two
+/// exports from the editor.
+#[test]
+fn export_test_set() {
+    use atari::Atari;
+    use retro_core::Machine;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+    let read = |name: &str| std::fs::read(root.join(name)).ok();
+    let (Some(atari_txt), Some(ascii), Some(unicode)) = (
+        read("Atari.txt"),
+        read("Atari ASCII.txt"),
+        read("Atari Unicode.txt"),
+    ) else {
+        eprintln!("skipping: no export test set in samples/");
+        return;
+    };
+    let atari = Atari::default();
+    let d = atari::atascii::decode(&atari_txt);
+    let export =
+        |f: &dyn Fn(&[u8]) -> String| -> String { d.lines.iter().map(|l| f(l) + "\n").collect() };
+    assert_eq!(export(&|l| atari.export_ascii(l)).as_bytes(), ascii);
+    assert_eq!(export(&|l| atari.export_unicode(l)).as_bytes(), unicode);
+    for text in [&ascii, &unicode] {
+        assert_eq!(atari.import_text(text).lines, d.lines);
+    }
+    if let Some(pc) = read("PC Text.txt") {
+        let i = atari.import_text(&pc);
+        assert_eq!(i.converted_from.as_deref(), Some("PC text"));
+        assert_eq!(i.lines[0], b"This is a PC text file.");
+    }
+}

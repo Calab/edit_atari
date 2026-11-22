@@ -71,9 +71,28 @@ enum FileJobKind {
     /// Save Listing As: always plain text.
     SaveListingAs,
     /// Export as PC text, Unicode or ASCII with tags.
-    Export {
-        ascii: bool,
-    },
+    Export(ExportKind),
+}
+
+/// The forms File > Export writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportKind {
+    /// UTF-8 for the machine's font (Private Use characters).
+    MachineFont,
+    /// UTF-8 with standard symbols, for any font.
+    Standard,
+    /// Plain ASCII with tags.
+    Ascii,
+}
+
+impl ExportKind {
+    fn label(self) -> &'static str {
+        match self {
+            ExportKind::MachineFont => "Unicode",
+            ExportKind::Standard => "standard Unicode",
+            ExportKind::Ascii => "ASCII",
+        }
+    }
 }
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
@@ -116,6 +135,8 @@ pub struct App {
     /// The name an imported document, not yet saved, goes by: the PC
     /// file's name with the text format's extension.
     import_name: Option<String>,
+    /// Lines in capitals, waiting for an answer in the Import dialog.
+    pending_case: Option<Vec<Vec<u8>>>,
     /// The format the document was read in (see `retro_core::format`).
     pub format: &'static dyn FileFormat,
     /// A save waiting for an answer in a dialog.
@@ -181,6 +202,7 @@ impl App {
             editor,
             path: None,
             import_name: None,
+            pending_case: None,
             format,
             pending_save: None,
             message: None,
@@ -438,6 +460,7 @@ impl App {
             }
         };
         let d = self.spec.machine.import_text(&bytes);
+        let offer = self.spec.machine.case_offer(&d.lines);
         let mut doc = Document::from_lines(d.lines, d.final_eol);
         doc.mark_modified();
         let text = self.spec.machine.text_format();
@@ -452,6 +475,23 @@ impl App {
             "Imported {}",
             d.converted_from.unwrap_or_else(|| "PC text".into())
         ));
+        if let Some(offer) = offer {
+            self.dialog = Some(Dialog::import_case(&self.file_name(), &offer));
+            self.pending_case = Some(offer.lines);
+        }
+    }
+
+    /// Replace the imported text with its capitals (Import dialog).
+    fn convert_case(&mut self) {
+        let Some(lines) = self.pending_case.take() else {
+            return;
+        };
+        let name = self.import_name.take();
+        let mut doc = Document::from_lines(lines, self.editor.doc.final_eol);
+        doc.mark_modified();
+        self.new_editor(doc);
+        self.import_name = name;
+        self.message = Some("Imported; converted to capitals".into());
     }
 
     fn file_dialog(&self, title: &str, for_save: bool) -> rfd::FileDialog {
@@ -587,7 +627,7 @@ impl App {
                 then: None,
                 confirmed: false,
             }),
-            (FileJobKind::Export { ascii }, Some(path)) => self.export_to(&path, ascii),
+            (FileJobKind::Export(kind), Some(path)) => self.export_to(&path, kind),
             (_, None) => {} // cancelled
         }
     }
@@ -597,30 +637,61 @@ impl App {
         with_extension_like(&self.file_name(), "TXT")
     }
 
-    /// Write the document as PC text with this platform's line endings.
-    /// The document keeps its own file and format.
-    fn export_to(&mut self, path: &Path, ascii: bool) {
+    /// The document as PC text with this platform's line endings, and how
+    /// many characters had no exact equivalent.
+    fn export_text(&self, kind: ExportKind) -> (String, usize) {
         let machine = &self.spec.machine;
         let newline = if cfg!(windows) { "\r\n" } else { "\n" };
         let doc = &self.editor.doc;
         let lines = doc.lines();
         let mut text = String::new();
+        let mut lost = 0;
         for (i, line) in lines.iter().enumerate() {
-            text += &if ascii {
-                machine.export_ascii(line)
-            } else {
-                machine.export_unicode(line)
+            text += &match kind {
+                ExportKind::MachineFont => machine.export_unicode(line),
+                ExportKind::Ascii => machine.export_ascii(line),
+                ExportKind::Standard => {
+                    let (s, n) = machine.export_standard(line);
+                    lost += n;
+                    s
+                }
             };
             if i + 1 < lines.len() || doc.final_eol {
                 text += newline;
             }
         }
+        (text, lost)
+    }
+
+    /// Export was chosen in the dialog: warn first if characters would be
+    /// lost, then ask for the file name.
+    fn export_chosen(&mut self, kind: ExportKind) {
+        let (_, lost) = self.export_text(kind);
+        if lost > 0 {
+            self.dialog = Some(Dialog::export_lossy(kind, lost));
+        } else {
+            self.start_file_job(FileJobKind::Export(kind));
+        }
+    }
+
+    /// Write the document as PC text. The document keeps its own file and
+    /// format.
+    fn export_to(&mut self, path: &Path, kind: ExportKind) {
+        let (text, lost) = self.export_text(kind);
         match write_atomically(path, text.as_bytes()) {
             Ok(()) => {
                 self.note_folder(path);
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let kind = if ascii { "ASCII" } else { "Unicode" };
-                self.message = Some(format!("Exported {name} ({kind}, {} bytes)", text.len()));
+                let lost = match lost {
+                    0 => String::new(),
+                    1 => ", 1 character not exact".into(),
+                    n => format!(", {n} characters not exact"),
+                };
+                self.message = Some(format!(
+                    "Exported {name} ({}, {} bytes{lost})",
+                    kind.label(),
+                    text.len()
+                ));
             }
             Err(e) => self.message = Some(format!("Export failed: {e}")),
         }
@@ -828,9 +899,21 @@ impl App {
                     self.save_to(save);
                 }
             }
-            Purpose::Export => {
-                if button < 2 {
-                    self.start_file_job(FileJobKind::Export { ascii: button == 1 });
+            Purpose::Export => match button {
+                0 => self.export_chosen(ExportKind::MachineFont),
+                1 => self.export_chosen(ExportKind::Standard),
+                2 => self.export_chosen(ExportKind::Ascii),
+                _ => {}
+            },
+            Purpose::ImportCase => {
+                if button == 0 {
+                    self.convert_case();
+                }
+                self.pending_case = None;
+            }
+            Purpose::ExportLossy(kind) => {
+                if button == 0 {
+                    self.start_file_job(FileJobKind::Export(kind));
                 }
             }
             Purpose::ReopenAs => {
@@ -882,8 +965,13 @@ impl App {
     }
 
     /// Test hook: act as if Save Listing As chose `path`.
-    pub fn test_export(&mut self, path: PathBuf, ascii: bool) {
-        self.export_to(&path, ascii);
+    pub fn test_export(&mut self, path: PathBuf, kind: ExportKind) {
+        self.export_to(&path, kind);
+    }
+
+    pub fn test_export_choice(&mut self, button: usize) {
+        self.dialog = Some(Dialog::export(&self.file_name()));
+        self.dialog_choose(button);
     }
 
     pub fn test_save_listing_as(&mut self, path: PathBuf) {

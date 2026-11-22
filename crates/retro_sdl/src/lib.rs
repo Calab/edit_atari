@@ -209,10 +209,20 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         app.test_import(path.into());
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_EXPORT_UNICODE") {
-        app.test_export(path.into(), false);
+        app.test_export(path.into(), app::ExportKind::MachineFont);
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_EXPORT_STANDARD") {
+        app.test_export(path.into(), app::ExportKind::Standard);
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_EXPORT_ASCII") {
-        app.test_export(path.into(), true);
+        app.test_export(path.into(), app::ExportKind::Ascii);
+    }
+    // Choose a button in the Export dialog (e.g. 1 to see the warning).
+    if let Some(n) = std::env::var("RETRO_EDITOR_EXPORT_CHOICE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        app.test_export_choice(n);
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_LISTING_AS") {
         app.test_save_listing_as(path.into());

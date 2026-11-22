@@ -20,6 +20,9 @@ static FALLBACK_MONO: &[u8] = include_bytes!("../../../assets/fonts/ui/NotoSansM
 /// The fallback fonts' licence, for the Licensing page.
 pub const FALLBACK_LICENSE: &str = include_str!("../../../assets/fonts/ui/OFL.txt");
 
+/// In text for [`UiFont::draw_marked`], switches bold on or off.
+pub const BOLD: char = '\u{1}';
+
 /// Proportional for menus and dialogs; monospace for pages of plain text
 /// such as licences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +184,50 @@ impl<'t> UiFont<'t> {
     /// Width of `s` in pixels.
     pub fn measure(&mut self, s: &str) -> i32 {
         s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil() as i32
+    }
+
+    /// How far bold text is drawn twice apart: about a pixel at normal
+    /// size, more on high-DPI displays.
+    fn bold_offset(&self) -> i32 {
+        ((self.px / 13.0).round() as i32).max(1)
+    }
+
+    /// The parts of marked text, with whether each is bold.
+    fn marked_parts(s: &str) -> impl Iterator<Item = (bool, &str)> {
+        s.split(BOLD)
+            .enumerate()
+            .map(|(i, part)| (i % 2 == 1, part))
+    }
+
+    /// Width of text with [`BOLD`] marks.
+    pub fn measure_marked(&mut self, s: &str) -> i32 {
+        let offset = self.bold_offset();
+        Self::marked_parts(s)
+            .map(|(bold, part)| self.measure(part) + if bold { offset } else { 0 })
+            .sum()
+    }
+
+    /// Draw text with [`BOLD`] marks: bold parts are drawn twice, slightly
+    /// apart (the system font may have no bold face). Returns the width.
+    pub fn draw_marked(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        x: i32,
+        y: i32,
+        s: &str,
+        color: Color,
+    ) -> i32 {
+        let offset = self.bold_offset();
+        let mut pen = x;
+        for (bold, part) in Self::marked_parts(s) {
+            if bold {
+                for dx in 1..=offset {
+                    self.draw(canvas, pen + dx, y, part, color);
+                }
+            }
+            pen += self.draw(canvas, pen, y, part, color) + if bold { offset } else { 0 };
+        }
+        pen - x
     }
 
     /// Draw `s` with its line box's top-left at (x, y). Returns the width.

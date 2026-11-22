@@ -1,0 +1,7 @@
+This is a  of the Atari and PC file handling.
+
+There is  video in this test.
+
+There are also control characters: 
+
+and some graphics 

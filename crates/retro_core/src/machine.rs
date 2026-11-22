@@ -15,6 +15,19 @@ pub struct Decoded {
     pub converted_from: Option<String>,
 }
 
+/// An offer, after Import, to put a listing's lower case in capitals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseOffer {
+    /// What the file is, e.g. "a BASIC program".
+    pub what: &'static str,
+    /// What is left as it is, e.g. "Strings, REM and DATA".
+    pub kept: &'static str,
+    /// The converted lines.
+    pub lines: Vec<Vec<u8>>,
+    /// How many lines change.
+    pub changed: usize,
+}
+
 pub trait Machine {
     /// Short display name, e.g. "Atari 8-bit".
     fn name(&self) -> &'static str;
@@ -86,6 +99,24 @@ pub trait Machine {
         line.iter().map(|&c| self.char_for_code(c)).collect()
     }
 
+    /// A line as standard Unicode for export, readable in any font, and
+    /// how many characters had no exact equivalent. Default: printable
+    /// ASCII as itself, `?` (counted) for the rest.
+    fn export_standard(&self, line: &[u8]) -> (String, usize) {
+        let mut lost = 0;
+        let s = line
+            .iter()
+            .map(|&c| match c {
+                0x20..=0x7E => c as char,
+                _ => {
+                    lost += 1;
+                    '?'
+                }
+            })
+            .collect();
+        (s, lost)
+    }
+
     /// A line as plain ASCII for export. Default: printable ASCII as
     /// itself, other codes as `{$xx}`.
     fn export_ascii(&self, line: &[u8]) -> String {
@@ -114,6 +145,11 @@ pub trait Machine {
             final_eol: true,
             converted_from: Some("PC text".into()),
         }
+    }
+
+    /// After Import: whether to offer converting lower case to capitals.
+    fn case_offer(&self, _lines: &[Vec<u8>]) -> Option<CaseOffer> {
+        None
     }
 
     /// Whether a file looks like PC text that should be imported rather
