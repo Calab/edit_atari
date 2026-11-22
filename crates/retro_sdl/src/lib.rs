@@ -8,9 +8,11 @@ pub mod config;
 mod dialog;
 pub mod menu;
 mod prefs;
+mod print_page;
 pub mod render;
 pub mod ui_font;
 mod view;
+mod widgets;
 
 use std::path::{Path, PathBuf};
 
@@ -202,7 +204,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.open_menu(m);
     }
-    // RETRO_EDITOR_HELP = help | filetypes | licensing | about | prefs | reopen | export
+    // RETRO_EDITOR_HELP = help | filetypes | licensing | about | prefs | print | reopen | export
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
         Ok("filetypes") => app::Overlay::FileTypes,
@@ -212,6 +214,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         }
         Ok("reopen") => {
             app.test_reopen_as();
+            app::Overlay::None
+        }
+        Ok("print") => {
+            app.test_open_print();
             app::Overlay::None
         }
         Ok("export") => {
@@ -231,6 +237,9 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
     {
         app.menu.context = Some((x, y));
+    }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_PDF") {
+        app.test_save_pdf(path.into());
     }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_IMPORT") {
         app.test_import(path.into());

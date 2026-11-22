@@ -83,6 +83,16 @@ impl App {
             );
             self.prefs = Some(p);
         }
+        if let Some(mut p) = self.print.take() {
+            p.draw(
+                canvas,
+                small,
+                &self.print_view(),
+                (f.width, f.height),
+                self.prefs_pad,
+            );
+            self.print = Some(p);
+        }
     }
 
     fn draw_text(&self, grid: &mut Grid, f: &Frame) {

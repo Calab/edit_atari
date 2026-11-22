@@ -37,13 +37,15 @@ character set is built in.
   width (F4).
 - The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it
   off).
-- Imports and exports PC text: UTF-8 for the Atari font, or plain ASCII
-  with `{tags}` (see [File types](#file-types)).
+- Imports and exports PC text: UTF-8 for the Atari font, standard Unicode,
+  or plain ASCII with `{tags}` (see [File types](#file-types)).
+- Prints with the Atari characters (File > Print), or saves the printout as
+  a PDF.
 - Opens tokenized programs from nine Atari languages and saves Atari BASIC
   programs tokenized (see [File types](#file-types)).
 
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
-  S, Z, Y, X, C, V, A), underlined hot keys (Alt+F then Q quits), a
+  S, P, Z, Y, X, C, V, A), underlined hot keys (Alt+F then Q quits), a
   right-click menu, and the system's own Open and Save dialogs.
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
   zoom, text and background colours, character set, key click, CONTROL
@@ -126,6 +128,14 @@ dialect is recognized from the file itself.
     and `{INV}`...`{/INV}` around inverse characters.
 
   The document keeps its own file and format.
+- **Printing**: File > Print (Ctrl+P) lays the document out on Letter or A4
+  pages, 40 characters a line or as wide as the page, at the character
+  size you choose (5 to 24 points), with an optional header of the file
+  name and page numbers. The characters are drawn from the editor's own
+  Atari character set, so graphics and inverse video print exactly as on
+  screen and no font needs installing. *Print* opens the printout as a PDF
+  in your PDF viewer, where its Print command chooses the printer and
+  pages; *Save as PDF* saves it instead. The settings are remembered.
 - **Importing**: File > Import reads a PC text file (any line endings,
   UTF-8 or not) as ATASCII: tags and Private Use characters become their
   Atari codes, a tab becomes the Atari TAB, and accented letters the

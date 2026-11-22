@@ -13,6 +13,7 @@ pub mod format;
 pub mod input;
 pub mod layout;
 pub mod machine;
+pub mod print;
 pub mod tabs;
 
 pub use document::{Document, Pos, Snapshot};

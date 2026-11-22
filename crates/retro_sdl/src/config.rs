@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use retro_core::WrapMode;
+use retro_core::print::Paper;
 
 /// Which PC key acts as the machine's CONTROL key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +62,12 @@ pub struct Config {
     /// Cycle dim colours after `attract_minutes` without input.
     pub attract_on: bool,
     pub attract_minutes: u32,
+    /// File > Print: paper, rows as wide as the page (else 40 characters),
+    /// character size in points, and the page header.
+    pub print_paper: Paper,
+    pub print_fill: bool,
+    pub print_size: u32,
+    pub print_header: bool,
 }
 
 impl Config {
@@ -100,7 +107,33 @@ impl Default for Config {
             border_color: None,
             attract_on: true,
             attract_minutes: DEFAULT_ATTRACT_MINUTES,
+            print_paper: default_paper(),
+            print_fill: false,
+            print_size: DEFAULT_PRINT_SIZE,
+            print_header: true,
         }
+    }
+}
+
+/// Letter where the locale says it's used (the Americas, the Philippines),
+/// A4 elsewhere; Letter when there's no locale to go by.
+fn default_paper() -> Paper {
+    let locale = ["LC_ALL", "LC_PAPER", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX");
+    let Some(locale) = locale else {
+        return Paper::Letter;
+    };
+    let country = locale
+        .split(['.', '@'])
+        .next()
+        .and_then(|l| l.split('_').nth(1))
+        .unwrap_or("");
+    match country {
+        "US" | "CA" | "MX" | "PH" | "CL" | "CO" | "VE" | "CR" | "GT" | "PR" => Paper::Letter,
+        "" => Paper::Letter,
+        _ => Paper::A4,
     }
 }
 
@@ -111,6 +144,10 @@ pub const DEFAULT_LINE_WARNING: usize = 114;
 pub const MAX_LINE_WARNING: usize = 9999;
 pub const DEFAULT_ATTRACT_MINUTES: u32 = 5;
 pub const MAX_ATTRACT_MINUTES: u32 = 60;
+/// Print character sizes, in points.
+pub const DEFAULT_PRINT_SIZE: u32 = 10;
+pub const MIN_PRINT_SIZE: u32 = 5;
+pub const MAX_PRINT_SIZE: u32 = 24;
 
 /// "9,2" -> (9, 2).
 fn parse_color(v: &str) -> Option<(u8, u8)> {
@@ -204,6 +241,18 @@ impl Config {
                         c.attract_minutes = n.clamp(1, MAX_ATTRACT_MINUTES);
                     }
                 }
+                "print_paper" => match v {
+                    "letter" => c.print_paper = Paper::Letter,
+                    "a4" => c.print_paper = Paper::A4,
+                    _ => {}
+                },
+                "print_width" => c.print_fill = v == "page",
+                "print_size" => {
+                    if let Ok(n) = v.parse::<u32>() {
+                        c.print_size = n.clamp(MIN_PRINT_SIZE, MAX_PRINT_SIZE);
+                    }
+                }
+                "print_header" => c.print_header = v != "off",
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -240,7 +289,12 @@ impl Config {
              background_color = {}\n\
              border_color = {}\n\
              attract = {}\n\
-             attract_minutes = {}\n",
+             attract_minutes = {}\n\
+             # File > Print: paper letter | a4; width 40 | page; size in points\n\
+             print_paper = {}\n\
+             print_width = {}\n\
+             print_size = {}\n\
+             print_header = {}\n",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -267,6 +321,13 @@ impl Config {
             color_text(self.border_color),
             on_off(self.attract_on),
             self.attract_minutes,
+            match self.print_paper {
+                Paper::Letter => "letter",
+                Paper::A4 => "a4",
+            },
+            if self.print_fill { "page" } else { "40" },
+            self.print_size,
+            on_off(self.print_header),
         )
     }
 
@@ -307,6 +368,10 @@ mod tests {
             border_color: Some((3, 4)),
             attract_on: false,
             attract_minutes: 9,
+            print_paper: Paper::A4,
+            print_fill: true,
+            print_size: 8,
+            print_header: false,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }

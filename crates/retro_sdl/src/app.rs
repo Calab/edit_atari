@@ -72,6 +72,8 @@ enum FileJobKind {
     SaveListingAs,
     /// Export as PC text, Unicode or ASCII with tags.
     Export(ExportKind),
+    /// Save the printout as a PDF.
+    SavePdf,
 }
 
 /// The forms File > Export writes.
@@ -97,6 +99,8 @@ impl ExportKind {
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 use crate::prefs::{self, Field, Op, Prefs};
+use crate::print_page::{self, PrintPage};
+use retro_core::print::{Paper, PrintSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
@@ -147,6 +151,8 @@ pub struct App {
     pub overlay_top: usize,
     /// The Preferences page, when open.
     pub prefs: Option<Prefs>,
+    /// The Print page, when open.
+    pub print: Option<PrintPage>,
     pub menus: Vec<Menu>,
     pub context_menu: Menu,
     pub menu: MenuState,
@@ -210,6 +216,7 @@ impl App {
             overlay: Overlay::None,
             overlay_top: 0,
             prefs: None,
+            print: None,
             menus: menu::menus(alt_charset),
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
@@ -561,6 +568,14 @@ impl App {
                 self.in_start_dir(d, true)
             }
             FileJobKind::Open => self.file_dialog("Open", false),
+            FileJobKind::SavePdf => {
+                let d = rfd::FileDialog::new()
+                    .set_title("Save as PDF")
+                    .add_filter("PDF files (.pdf)", &["pdf", "PDF"])
+                    .add_filter("All files", &["*"])
+                    .set_file_name(with_extension_like(&self.file_name(), "PDF"));
+                self.in_start_dir(d, true)
+            }
             FileJobKind::Import => {
                 let d = rfd::FileDialog::new()
                     .set_title("Import")
@@ -581,7 +596,8 @@ impl App {
             let _ = tx.send(match kind {
                 FileJobKind::SaveAs { .. }
                 | FileJobKind::SaveListingAs
-                | FileJobKind::Export { .. } => d.save_file(),
+                | FileJobKind::Export { .. }
+                | FileJobKind::SavePdf => d.save_file(),
                 FileJobKind::Open | FileJobKind::Import => d.pick_file(),
                 FileJobKind::Folder => d.pick_folder(),
             });
@@ -616,6 +632,7 @@ impl App {
                 self.open_path(&path);
             }
             (FileJobKind::Import, Some(path)) => self.import_path(&path),
+            (FileJobKind::SavePdf, Some(path)) => self.save_pdf(&path),
             (FileJobKind::Folder, Some(dir)) => {
                 self.config.default_dir = dir.to_string_lossy().into_owned();
                 self.config.dir_mode = DirMode::Fixed;
@@ -1053,6 +1070,192 @@ impl App {
         self.charset_changed = true;
     }
 
+    // ----- print page ----------------------------------------------------------
+
+    pub fn open_print(&mut self) {
+        self.close_menu();
+        self.overlay = Overlay::None;
+        self.print = Some(PrintPage::new());
+    }
+
+    fn print_settings(&self) -> PrintSettings {
+        PrintSettings {
+            paper: self.config.print_paper,
+            columns: (!self.config.print_fill).then_some(40),
+            size: self.config.print_size as f32,
+            header: self.config.print_header,
+        }
+    }
+
+    /// The values shown on the Print page.
+    pub fn print_view(&self) -> print_page::View {
+        let s = self.print_settings();
+        let l = s.layout();
+        let pages = retro_core::print::page_count(self.editor.doc.lines(), &s);
+        let plural = |n: usize, what: &str| {
+            if n == 1 {
+                format!("1 {what}")
+            } else {
+                format!("{n} {what}s")
+            }
+        };
+        let summary = if s.columns.is_some_and(|n| n > l.columns) {
+            format!(
+                "Only {} fit across at this size; {}",
+                plural(l.columns, "character"),
+                plural(pages, "page")
+            )
+        } else {
+            format!(
+                "{} a line, {} a page; {}",
+                plural(l.columns, "character"),
+                plural(l.rows, "line"),
+                plural(pages, "page")
+            )
+        };
+        print_page::View {
+            paper: usize::from(self.config.print_paper == Paper::A4),
+            width: usize::from(self.config.print_fill),
+            size: self.config.print_size,
+            header: self.config.print_header,
+            summary,
+        }
+    }
+
+    fn print_apply(&mut self, f: print_page::Field, op: Op) {
+        use print_page::Field as P;
+        match (f, op) {
+            (P::Paper, Op::Choose(i)) => {
+                self.config.print_paper = if i == 0 { Paper::Letter } else { Paper::A4 }
+            }
+            (P::Width, Op::Choose(i)) => self.config.print_fill = i == 1,
+            (P::Size, Op::Dec | Op::Inc) => {
+                let n = self.config.print_size;
+                self.config.print_size = if op == Op::Inc { n + 1 } else { n - 1 }
+                    .clamp(config::MIN_PRINT_SIZE, config::MAX_PRINT_SIZE);
+            }
+            (P::Header, Op::Toggle) => self.config.print_header = !self.config.print_header,
+            (P::Print, Op::Press) => self.print_now(),
+            (P::SavePdf, Op::Press) => {
+                self.print = None;
+                self.start_file_job(FileJobKind::SavePdf);
+            }
+            (P::Cancel, Op::Press) => self.print = None,
+            _ => {}
+        }
+    }
+
+    /// A key pressed while the Print page is open. Every key is used up.
+    fn print_key(&mut self, k: Keycode, shift: bool) {
+        use print_page::Field as P;
+        let Some(p) = &mut self.print else { return };
+        let f = p.focused();
+        let choice = match f {
+            P::Paper => Some(usize::from(self.config.print_paper == Paper::A4)),
+            P::Width => Some(usize::from(self.config.print_fill)),
+            _ => None,
+        };
+        match k {
+            Keycode::TAB => p.move_focus(if shift { -1 } else { 1 }),
+            Keycode::UP => p.move_focus(-1),
+            Keycode::DOWN => p.move_focus(1),
+            Keycode::ESCAPE => self.print = None,
+            Keycode::RETURN | Keycode::KP_ENTER => match f {
+                P::SavePdf | P::Cancel => self.print_apply(f, Op::Press),
+                _ => self.print_apply(P::Print, Op::Press),
+            },
+            Keycode::LEFT | Keycode::RIGHT => {
+                if let Some(cur) = choice {
+                    self.print_apply(f, Op::Choose(1 - cur));
+                } else if f == P::Size {
+                    let op = if k == Keycode::RIGHT {
+                        Op::Inc
+                    } else {
+                        Op::Dec
+                    };
+                    self.print_apply(f, op);
+                }
+            }
+            Keycode::SPACE => match choice {
+                Some(cur) => self.print_apply(f, Op::Choose(1 - cur)),
+                None => {
+                    self.print_apply(f, Op::Toggle);
+                    self.print_apply(f, Op::Press);
+                }
+            },
+            _ => {}
+        }
+    }
+
+    /// The document as a PDF with the current print settings.
+    fn print_pdf(&self) -> (Vec<u8>, usize) {
+        let s = self.print_settings();
+        let lines = self.editor.doc.lines();
+        let pdf = retro_core::print::pdf(self.spec.machine.as_ref(), lines, &self.file_name(), &s);
+        (pdf, retro_core::print::page_count(lines, &s))
+    }
+
+    /// Print: write the PDF to a temporary file and open it in the
+    /// system's PDF viewer, whose print dialog does the printing.
+    fn print_now(&mut self) {
+        self.print = None;
+        let (pdf, pages) = self.print_pdf();
+        let dir = std::env::temp_dir().join(self.spec.app_id);
+        let stem = Path::new(&self.file_name())
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".into());
+        let _ = std::fs::create_dir_all(&dir);
+        // A viewer may still have an earlier printout open (and locked, on
+        // Windows), so try a few names.
+        let written = (1..=9).find_map(|n| {
+            let name = if n == 1 {
+                format!("{stem}.pdf")
+            } else {
+                format!("{stem} ({n}).pdf")
+            };
+            let path = dir.join(name);
+            std::fs::write(&path, &pdf).ok().map(|()| path)
+        });
+        let Some(path) = written else {
+            self.message = Some(format!("Print failed: can't write to {}", dir.display()));
+            return;
+        };
+        self.message = Some(match open_in_viewer(&path) {
+            Ok(()) => format!(
+                "Opened the printout ({pages} page{}) in the PDF viewer: print from there",
+                if pages == 1 { "" } else { "s" }
+            ),
+            Err(e) => format!(
+                "Can't open the PDF viewer ({e}); the printout is {}",
+                path.display()
+            ),
+        });
+    }
+
+    fn save_pdf(&mut self, path: &Path) {
+        let (pdf, pages) = self.print_pdf();
+        match write_atomically(path, &pdf) {
+            Ok(()) => {
+                self.note_folder(path);
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                self.message = Some(format!(
+                    "Saved {name} ({pages} page{})",
+                    if pages == 1 { "" } else { "s" }
+                ));
+            }
+            Err(e) => self.message = Some(format!("Save failed: {e}")),
+        }
+    }
+
+    pub fn test_open_print(&mut self) {
+        self.open_print();
+    }
+
+    pub fn test_save_pdf(&mut self, path: PathBuf) {
+        self.save_pdf(&path);
+    }
+
     // ----- preferences page ----------------------------------------------------
 
     pub fn open_prefs(&mut self, focus: Field) {
@@ -1186,11 +1389,15 @@ impl App {
 
     /// Put every setting on the Preferences page back to its default.
     /// Settings the page doesn't show (the last folder used, the click
-    /// volume) are kept.
+    /// volume, the print settings) are kept.
     fn reset_prefs(&mut self) {
         let d = Config {
             last_dir: std::mem::take(&mut self.config.last_dir),
             click_volume: self.config.click_volume,
+            print_paper: self.config.print_paper,
+            print_fill: self.config.print_fill,
+            print_size: self.config.print_size,
+            print_header: self.config.print_header,
             ..Config::default()
         };
         self.config = d;
@@ -1354,7 +1561,11 @@ impl App {
             return;
         }
         let layout = &ctx.frame.layout;
-        if self.dialog.is_some() || self.file_job.is_some() || self.prefs.is_some() {
+        if self.dialog.is_some()
+            || self.file_job.is_some()
+            || self.prefs.is_some()
+            || self.print.is_some()
+        {
             return;
         }
         match c {
@@ -1366,6 +1577,7 @@ impl App {
             SaveAs => self.start_file_job(FileJobKind::SaveAs { then: None }),
             SaveListingAs => self.start_file_job(FileJobKind::SaveListingAs),
             Export => self.dialog = Some(Dialog::export(&self.file_name())),
+            Print => self.open_print(),
             Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);
@@ -1535,6 +1747,9 @@ impl App {
             self.prefs_text(text);
             return false;
         }
+        if self.print.is_some() {
+            return false;
+        }
         let ctrl_held = held.intersects(Mod::LCTRLMOD | self.atari_ctrl_mod());
         let mut typed = false;
         if self.overlay == Overlay::None && !ctrl_held {
@@ -1615,6 +1830,11 @@ impl App {
             self.swallow_text = self.prefs_key(k, shift);
             return false;
         }
+        if self.print.is_some() {
+            self.print_key(k, shift);
+            self.swallow_text = true;
+            return false;
+        }
 
         if self.overlay != Overlay::None {
             match k {
@@ -1648,6 +1868,7 @@ impl App {
             let cmd = match k {
                 Keycode::N => Some(New),
                 Keycode::O => Some(Open),
+                Keycode::P => Some(Print),
                 Keycode::S if shift => Some(SaveAs),
                 Keycode::S => Some(Save),
                 Keycode::Q => Some(Quit),
@@ -1788,6 +2009,13 @@ impl App {
             }
             return;
         }
+        if let Some(p) = &mut self.print {
+            if let Some((f, op)) = p.hit(x, y) {
+                p.focus_on(f);
+                self.print_apply(f, op);
+            }
+            return;
+        }
         if self.overlay != Overlay::None {
             return;
         }
@@ -1810,6 +2038,7 @@ impl App {
         }
         if self.overlay != Overlay::None
             || self.prefs.is_some()
+            || self.print.is_some()
             || y < f.text_top
             || y >= f.status_top
         {
@@ -1905,6 +2134,23 @@ fn numpad_navigation(k: Keycode) -> Option<Keycode> {
 
 /// Write to a temporary file next to `path`, then rename over it, so a
 /// failed write never leaves a half-written file.
+/// Open a file in the system's viewer for its type, without waiting.
+fn open_in_viewer(path: &Path) -> std::io::Result<()> {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(program).arg(path).spawn()?;
+    // Collect the launcher when it exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp~");
