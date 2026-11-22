@@ -194,6 +194,15 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.menu.context = Some((x, y));
     }
+    if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_AS") {
+        app.test_save_as(path.into());
+    }
+    // Press dialog buttons in turn, e.g. "0,0".
+    if let Ok(list) = std::env::var("RETRO_EDITOR_CHOOSE") {
+        for n in list.split(',').filter_map(|n| n.trim().parse().ok()) {
+            app.test_choose(n);
+        }
+    }
     if std::env::var_os("RETRO_EDITOR_ATTRACT").is_some() {
         app.test_attract();
     }

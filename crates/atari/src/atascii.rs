@@ -170,8 +170,11 @@ impl retro_core::FileFormat for AtasciiText {
         true
     }
 
-    fn encode(&self, doc: &retro_core::Document) -> Result<Vec<u8>, String> {
-        Ok(encode(doc.lines(), doc.final_eol))
+    fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {
+        Ok(retro_core::Encoded::clean(encode(
+            doc.lines(),
+            doc.final_eol,
+        )))
     }
 }
 

@@ -8,6 +8,7 @@ pub mod keyboard;
 pub mod mac65;
 pub mod msbasic;
 pub mod palette;
+pub mod tokenize;
 
 use retro_core::{FileFormat, Machine, TabStops};
 

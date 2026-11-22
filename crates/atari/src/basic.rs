@@ -94,7 +94,7 @@ pub struct Dialect {
 }
 
 impl Dialect {
-    fn statement(&self, t: u8) -> Option<&'static str> {
+    pub(crate) fn statement(&self, t: u8) -> Option<&'static str> {
         match t
             .checked_sub(self.first_statement)
             .and_then(|i| self.statements.get(i as usize).copied())
@@ -105,7 +105,7 @@ impl Dialect {
         }
     }
 
-    fn operator(&self, t: u8) -> Option<&'static str> {
+    pub(crate) fn operator(&self, t: u8) -> Option<&'static str> {
         match t
             .checked_sub(self.first_operator)
             .and_then(|i| self.operators.get(i as usize).copied())
@@ -116,7 +116,7 @@ impl Dialect {
         }
     }
 
-    fn is_raw(&self, t: u8) -> bool {
+    pub(crate) fn is_raw(&self, t: u8) -> bool {
         self.raw_statements.contains(&t) || self.base.is_some_and(|b| b.is_raw(t))
     }
 
@@ -624,6 +624,22 @@ impl FileFormat for TokenizedBasic {
         self.list(bytes).ok().map(|(_, misfit)| misfit)
     }
 
+    /// Only Atari BASIC has a tokenizer so far.
+    fn can_encode(&self) -> bool {
+        std::ptr::eq(self.dialect, &ATARI_BASIC)
+    }
+
+    fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {
+        if !self.can_encode() {
+            return Err(format!("{} files can't be written yet", self.name()));
+        }
+        let p = crate::tokenize::tokenize(self.dialect, doc.lines())?;
+        Ok(retro_core::Encoded {
+            bytes: p.bytes,
+            problem_lines: p.error_lines.into_iter().map(u32::from).collect(),
+        })
+    }
+
     fn looks_like(&self, bytes: &[u8]) -> bool {
         Header::read(bytes).is_ok()
     }
@@ -686,13 +702,13 @@ impl TokenizedBasic {
 }
 
 /// Where the variable names and program lines are in the file.
-struct Header {
-    vnt: std::ops::Range<usize>,
-    program: std::ops::Range<usize>,
+pub(crate) struct Header {
+    pub(crate) vnt: std::ops::Range<usize>,
+    pub(crate) program: std::ops::Range<usize>,
 }
 
 impl Header {
-    fn read(bytes: &[u8]) -> Result<Header, String> {
+    pub(crate) fn read(bytes: &[u8]) -> Result<Header, String> {
         let word = |i: usize| -> Option<usize> {
             Some(u16::from_le_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as usize)
         };
@@ -722,7 +738,7 @@ impl Header {
 }
 
 /// Variable names in table order. A name ends at a byte with bit 7 set.
-fn variable_names(table: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn variable_names(table: &[u8]) -> Vec<Vec<u8>> {
     let mut names = Vec::new();
     let mut cur = Vec::new();
     for &b in table {

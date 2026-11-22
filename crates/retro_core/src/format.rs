@@ -52,8 +52,28 @@ pub trait FileFormat: Sync {
     }
 
     /// Write a document in this format.
-    fn encode(&self, _doc: &Document) -> Result<Vec<u8>, String> {
+    fn encode(&self, _doc: &Document) -> Result<Encoded, String> {
         Err(format!("{} files can't be written yet", self.name()))
+    }
+}
+
+/// A document written in a format.
+#[derive(Debug)]
+pub struct Encoded {
+    pub bytes: Vec<u8>,
+    /// Line numbers of lines that couldn't be written properly and were
+    /// stored another way (a BASIC line with a syntax error is stored as
+    /// an ERROR- line). The editor asks before saving these.
+    pub problem_lines: Vec<u32>,
+}
+
+impl Encoded {
+    /// Bytes with no problem lines.
+    pub fn clean(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            problem_lines: Vec::new(),
+        }
     }
 }
 

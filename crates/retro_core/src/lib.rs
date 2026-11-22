@@ -17,7 +17,7 @@ pub mod tabs;
 
 pub use document::{Document, Pos, Snapshot};
 pub use editor::Editor;
-pub use format::FileFormat;
+pub use format::{Encoded, FileFormat};
 pub use input::{EditAction, Key, KeyInput, KeyboardRules, Mods};
 pub use layout::{Layout, WrapMode};
 pub use machine::{Decoded, Machine};

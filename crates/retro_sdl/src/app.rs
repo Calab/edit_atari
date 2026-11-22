@@ -35,6 +35,15 @@ struct FileJob {
     rx: mpsc::Receiver<Option<PathBuf>>,
 }
 
+/// A save in progress: where, in what format, and what to do after.
+struct PendingSave {
+    path: PathBuf,
+    format: &'static dyn FileFormat,
+    then: Option<After>,
+    /// The user agreed to save lines as ERROR- lines.
+    confirmed: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum FileJobKind {
     Open,
@@ -84,6 +93,8 @@ pub struct App {
     pub path: Option<PathBuf>,
     /// The format the document was read in (see `retro_core::format`).
     pub format: &'static dyn FileFormat,
+    /// A save waiting for an answer in a dialog.
+    pending_save: Option<PendingSave>,
     pub message: Option<String>,
     pub running: bool,
     pub overlay: Overlay,
@@ -145,6 +156,7 @@ impl App {
             editor,
             path: None,
             format,
+            pending_save: None,
             message: None,
             running: true,
             overlay: Overlay::None,
@@ -472,15 +484,7 @@ impl App {
                 self.config.default_dir = dir.to_string_lossy().into_owned();
                 self.config.dir_mode = DirMode::Fixed;
             }
-            (FileJobKind::SaveAs { then }, Some(path)) => {
-                if self.write_to(&path) {
-                    self.note_folder(&path);
-                    self.path = Some(path);
-                    if let Some(after) = then {
-                        self.perform(after);
-                    }
-                }
-            }
+            (FileJobKind::SaveAs { then }, Some(path)) => self.save_as_to(path, then),
             (_, None) => {} // cancelled
         }
     }
@@ -508,44 +512,103 @@ impl App {
     /// if its format can't be written), then do `then` if the save worked.
     fn save(&mut self, then: Option<After>) {
         match self.path.clone() {
-            Some(_) if !self.format.can_encode() => {
-                self.start_file_job(FileJobKind::SaveAs { then });
-            }
-            Some(path) => {
-                if self.write_to(&path)
-                    && let Some(after) = then
-                {
-                    self.perform(after);
-                }
-            }
-            None => self.start_file_job(FileJobKind::SaveAs { then }),
+            Some(path) if self.format.can_encode() => self.save_to(PendingSave {
+                path,
+                format: self.format,
+                then,
+                confirmed: false,
+            }),
+            _ => self.start_file_job(FileJobKind::SaveAs { then }),
         }
     }
 
-    /// Write the document in its format, or as text if its format can't be
-    /// written.
-    fn write_to(&mut self, path: &Path) -> bool {
-        let fmt = if self.format.can_encode() {
-            self.format
-        } else {
-            self.spec.machine.text_format()
+    /// Save As chose `path`: pick the format from its extension.
+    ///
+    /// * An extension a writable tokenized format uses (`.BAS`...): the
+    ///   document's own format if it's one of those, otherwise ask which.
+    /// * The text format's extension or `.TXT`: text.
+    /// * Anything else: the document's format if it can be written, else
+    ///   text.
+    fn save_as_to(&mut self, path: PathBuf, then: Option<After>) {
+        let text = self.spec.machine.text_format();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        let uses_ext = |f: &&'static dyn FileFormat| {
+            f.extension() == ext || f.extensions().iter().any(|x| x.eq_ignore_ascii_case(&ext))
         };
-        let written = fmt.encode(&self.editor.doc).and_then(|bytes| {
-            write_atomically(path, &bytes)
-                .map(|()| bytes)
-                .map_err(|e| e.to_string())
-        });
-        match written {
-            Ok(bytes) => {
-                self.format = fmt;
-                self.editor.doc.mark_saved();
-                self.message = Some(format!("Saved {} bytes", bytes.len()));
-                true
+        let candidates: Vec<&'static dyn FileFormat> = self
+            .spec
+            .machine
+            .formats()
+            .iter()
+            .copied()
+            .filter(|f| f.can_encode() && !format::same(*f, text))
+            .filter(uses_ext)
+            .collect();
+        let pending = |format| PendingSave {
+            path: path.clone(),
+            format,
+            then,
+            confirmed: false,
+        };
+        if !candidates.is_empty() {
+            if candidates.iter().any(|f| format::same(*f, self.format)) {
+                self.save_to(pending(self.format));
+            } else {
+                let mut names: Vec<&'static str> = candidates.iter().map(|f| f.name()).collect();
+                names.push(text.name());
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                self.dialog = Some(Dialog::save_as_format(&name.unwrap_or_default(), names));
+                self.pending_save = Some(pending(text));
             }
+        } else if ext == text.extension() || ext == "TXT" || !self.format.can_encode() {
+            self.save_to(pending(text));
+        } else {
+            self.save_to(pending(self.format));
+        }
+    }
+
+    /// Write a pending save, first asking if lines would be saved as
+    /// ERROR- lines. On success the file becomes the document's.
+    fn save_to(&mut self, save: PendingSave) {
+        let encoded = match save.format.encode(&self.editor.doc) {
+            Ok(e) => e,
             Err(e) => {
                 self.message = Some(format!("Save failed: {e}"));
-                false
+                return;
             }
+        };
+        if !encoded.problem_lines.is_empty() && !save.confirmed {
+            self.dialog = Some(Dialog::save_problem_lines(
+                save.format.name(),
+                &encoded.problem_lines,
+            ));
+            self.pending_save = Some(save);
+            return;
+        }
+        if let Err(e) = write_atomically(&save.path, &encoded.bytes) {
+            self.message = Some(format!("Save failed: {e}"));
+            return;
+        }
+        self.format = save.format;
+        self.editor.doc.mark_saved();
+        self.note_folder(&save.path);
+        self.path = Some(save.path);
+        let errors = match encoded.problem_lines.len() {
+            0 => String::new(),
+            1 => ", 1 line as ERROR-".into(),
+            n => format!(", {n} lines as ERROR-"),
+        };
+        self.message = Some(format!(
+            "Saved {} bytes ({}{errors})",
+            encoded.bytes.len(),
+            save.format.name()
+        ));
+        if let Some(after) = save.then {
+            self.perform(after);
         }
     }
 
@@ -581,6 +644,28 @@ impl App {
                 1 => self.perform(after),
                 _ => {}
             },
+            Purpose::SaveProblemLines => {
+                if let Some(mut save) = self.pending_save.take()
+                    && button == 0
+                {
+                    save.confirmed = true;
+                    self.save_to(save);
+                }
+            }
+            Purpose::SaveAsFormat => {
+                let name = d.buttons.get(button).copied();
+                let chosen = self
+                    .spec
+                    .machine
+                    .formats()
+                    .iter()
+                    .copied()
+                    .find(|f| Some(f.name()) == name);
+                if let (Some(f), Some(mut save)) = (chosen, self.pending_save.take()) {
+                    save.format = f;
+                    self.save_to(save);
+                }
+            }
             Purpose::ReopenAs => {
                 let name = d.buttons.get(button).copied();
                 let chosen = self
@@ -622,6 +707,16 @@ impl App {
             .position(|&n| n == self.format.name())
             .unwrap_or(0);
         self.dialog = Some(Dialog::reopen_as(&self.file_name(), formats, current));
+    }
+
+    /// Test hook: press button `n` of the open dialog.
+    pub fn test_choose(&mut self, n: usize) {
+        self.dialog_choose(n);
+    }
+
+    /// Test hook: act as if Save As chose `path`.
+    pub fn test_save_as(&mut self, path: PathBuf) {
+        self.save_as_to(path, None);
     }
 
     /// Test hook: show the Reopen As chooser.

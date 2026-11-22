@@ -28,6 +28,11 @@ pub enum Purpose {
     /// Choose a format to read the current file in; the buttons are the
     /// formats' names, then Cancel.
     ReopenAs,
+    /// Some lines would be saved as ERROR- lines: Save Anyway / Cancel.
+    SaveProblemLines,
+    /// Choose the format to save in; the buttons are the formats' names,
+    /// then Cancel.
+    SaveAsFormat,
 }
 
 pub struct Dialog {
@@ -80,6 +85,47 @@ impl Dialog {
             text: format!("Read {file_name} as:"),
             buttons,
             focus: current,
+            cancel,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Save Anyway, 1 = Cancel.
+    pub fn save_problem_lines(format: &str, lines: &[u32]) -> Self {
+        let shown: Vec<String> = lines.iter().take(8).map(u32::to_string).collect();
+        let more = if lines.len() > 8 { ", ..." } else { "" };
+        let what = if lines.len() == 1 {
+            "line has a syntax error"
+        } else {
+            "lines have syntax errors"
+        };
+        Self {
+            purpose: Purpose::SaveProblemLines,
+            title: "Syntax errors".into(),
+            text: format!(
+                "{} {what}: {}{more}\n\
+                 They will be saved as ERROR- lines, as {format} would.",
+                lines.len(),
+                shown.join(", ")
+            ),
+            buttons: vec!["Save Anyway", "Cancel"],
+            focus: 1,
+            cancel: 1,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: one per format name, then Cancel.
+    pub fn save_as_format(file_name: &str, formats: Vec<&'static str>) -> Self {
+        let cancel = formats.len();
+        let mut buttons = formats;
+        buttons.push("Cancel");
+        Self {
+            purpose: Purpose::SaveAsFormat,
+            title: "Save As".into(),
+            text: format!("Save {file_name} as:"),
+            buttons,
+            focus: 0,
             cancel,
             button_rects: Vec::new(),
         }
