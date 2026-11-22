@@ -1,4 +1,4 @@
-//! The interface font for menus, the status bar and dialogs.
+//! The interface fonts for menus, the status bar, dialogs and text pages.
 //!
 //! Uses the operating system's own UI font when it can be found (Segoe UI
 //! on Windows, the system font on macOS, fontconfig's sans-serif on Linux),
@@ -13,11 +13,20 @@ use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
-/// Noto Sans, (c) Google, SIL Open Font License 1.1.
+/// Noto Sans and Noto Sans Mono, (c) Google, SIL Open Font License 1.1.
 static FALLBACK: &[u8] = include_bytes!("../../../assets/fonts/ui/NotoSans-Regular.ttf");
+static FALLBACK_MONO: &[u8] = include_bytes!("../../../assets/fonts/ui/NotoSansMono-Regular.ttf");
 
-/// The fallback font's licence, for the About screen.
+/// The fallback fonts' licence, for the Licensing page.
 pub const FALLBACK_LICENSE: &str = include_str!("../../../assets/fonts/ui/OFL.txt");
+
+/// Proportional for menus and dialogs; monospace for pages of plain text
+/// such as licences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    Proportional,
+    Monospace,
+}
 
 struct Glyph<'t> {
     tex: Option<Texture<'t>>,
@@ -37,40 +46,63 @@ pub struct UiFont<'t> {
     glyphs: HashMap<char, Glyph<'t>>,
 }
 
-/// Candidate system UI font files, best first.
-fn system_font_paths() -> Vec<std::path::PathBuf> {
-    let mut v = Vec::new();
+/// Candidate system font files for a style, best first.
+fn system_font_paths(style: Style) -> Vec<std::path::PathBuf> {
+    let mono = style == Style::Monospace;
+    let mut v: Vec<std::path::PathBuf> = Vec::new();
     if cfg!(windows) {
         let dir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
         let fonts = std::path::Path::new(&dir).join("Fonts");
-        v.push(fonts.join("segoeui.ttf"));
-        v.push(fonts.join("tahoma.ttf"));
+        let names: &[&str] = if mono {
+            &["consola.ttf", "cour.ttf"]
+        } else {
+            &["segoeui.ttf", "tahoma.ttf"]
+        };
+        v.extend(names.iter().map(|n| fonts.join(n)));
     } else if cfg!(target_os = "macos") {
-        v.push("/System/Library/Fonts/SFNS.ttf".into());
-        v.push("/System/Library/Fonts/Helvetica.ttc".into());
-        v.push("/Library/Fonts/Arial.ttf".into());
+        let names: &[&str] = if mono {
+            &[
+                "/System/Library/Fonts/SFNSMono.ttf",
+                "/System/Library/Fonts/Menlo.ttc",
+                "/System/Library/Fonts/Monaco.ttf",
+            ]
+        } else {
+            &[
+                "/System/Library/Fonts/SFNS.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/Library/Fonts/Arial.ttf",
+            ]
+        };
+        v.extend(names.iter().map(Into::into));
     } else {
-        // Ask fontconfig for the desktop's sans-serif font.
+        // Ask fontconfig for the desktop's font.
+        let family = if mono { "monospace" } else { "sans-serif" };
         if let Ok(out) = std::process::Command::new("fc-match")
-            .args(["-f", "%{file}", "sans-serif"])
+            .args(["-f", "%{file}", family])
             .output()
             && out.status.success()
         {
             v.push(String::from_utf8_lossy(&out.stdout).trim().into());
         }
-        for p in [
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        ] {
-            v.push(p.into());
-        }
+        let names: &[&str] = if mono {
+            &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            ]
+        } else {
+            &[
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            ]
+        };
+        v.extend(names.iter().map(Into::into));
     }
     v
 }
 
-fn load_font() -> Font {
-    for path in system_font_paths() {
+fn load_font(style: Style) -> Font {
+    for path in system_font_paths(style) {
         if let Ok(bytes) = std::fs::read(&path)
             && let Ok(font) = Font::from_bytes(bytes, FontSettings::default())
             && font.lookup_glyph_index('A') != 0
@@ -78,13 +110,17 @@ fn load_font() -> Font {
             return font;
         }
     }
-    Font::from_bytes(FALLBACK, FontSettings::default()).expect("built-in font is valid")
+    let fallback = match style {
+        Style::Proportional => FALLBACK,
+        Style::Monospace => FALLBACK_MONO,
+    };
+    Font::from_bytes(fallback, FontSettings::default()).expect("built-in font is valid")
 }
 
 impl<'t> UiFont<'t> {
-    /// Load the UI font at `px` pixels.
-    pub fn new(creator: &'t TextureCreator<WindowContext>, px: f32) -> Self {
-        let font = load_font();
+    /// Load the system font of the given style at `px` pixels.
+    pub fn new(creator: &'t TextureCreator<WindowContext>, px: f32, style: Style) -> Self {
+        let font = load_font(style);
         let (ascent, line_height) = match font.horizontal_line_metrics(px) {
             Some(m) => (m.ascent, m.new_line_size),
             None => (px * 0.8, px * 1.2),

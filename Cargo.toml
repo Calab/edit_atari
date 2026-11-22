@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-authors = ["Calab"]
+authors = ["Steve Norton", "Claude AI"]
 edition = "2024"
 license = "GPL-3.0-or-later"
 version = "0.1.0"

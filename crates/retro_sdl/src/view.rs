@@ -13,11 +13,11 @@ use crate::render::{Grid, rgb};
 use crate::ui_font::UiFont;
 
 impl App {
-    pub fn draw(
+    pub fn draw<'t>(
         &mut self,
         canvas: &mut Canvas<Window>,
         atlas: &mut Texture,
-        font: &mut UiFont,
+        (font, mono): (&mut UiFont<'t>, &mut UiFont<'t>),
         f: &Frame,
         clipboard: &ClipboardUtil,
     ) {
@@ -44,7 +44,13 @@ impl App {
             };
             self.draw_text(&mut grid, f);
         } else {
-            self.draw_overlay(canvas, font, f);
+            // Pages of plain text (licences) read best in a monospace font.
+            let page_font = if self.overlay == Overlay::Licensing {
+                &mut *mono
+            } else {
+                &mut *font
+            };
+            self.draw_overlay(canvas, page_font, f);
         }
 
         self.draw_status(canvas, font, f);

@@ -41,8 +41,18 @@ const HELP: &[&str] = &[
     "inserted as their Atari codes.",
 ];
 
-/// First year of copyright, for the About box.
+/// Copyright notice details, for About and Licensing.
 const COPYRIGHT_YEAR: &str = "2026";
+const COPYRIGHT_HOLDER: &str = "Steve Norton";
+
+/// The authors from Cargo.toml, as "A and B" (or "A, B and C").
+fn authors() -> String {
+    let names: Vec<&str> = env!("CARGO_PKG_AUTHORS").split(':').collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.concat(),
+    }
+}
 
 /// Program details for Help > About.
 fn about() -> String {
@@ -52,11 +62,13 @@ fn about() -> String {
          \n\
          A text editor for Atari 8-bit computer files.\n\
          \n\
-         Copyright \u{a9} {COPYRIGHT_YEAR} {}\n\
+         Author: {}\n\
+         Copyright \u{a9} {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}\n\
+         \n\
          Licensed under the GNU GPL, version 3 or later.\n\
          See Help > Licensing for details.",
         env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_AUTHORS").replace(':', ", "),
+        authors(),
     )
 }
 
@@ -64,7 +76,7 @@ fn about() -> String {
 fn licensing() -> String {
     format!(
         "ATARI EDITOR\n\
-         Copyright \u{a9} {COPYRIGHT_YEAR} {}\n\
+         Copyright \u{a9} {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}\n\
          \n\
          This program is free software: you can redistribute it and/or modify \
          it under the terms of the GNU General Public License as published by \
@@ -84,8 +96,9 @@ fn licensing() -> String {
          \n\
          INTERFACE FONT\n\
          \n\
-         The menus use the system's own font. When it can't be found, the \
-         built-in Noto Sans is used, under the SIL Open Font License 1.1:\n\
+         The menus and this page use the system's own fonts. When they can't \
+         be found, the built-in Noto Sans and Noto Sans Mono are used, under \
+         the SIL Open Font License 1.1:\n\
          \n\
          {}\n\
          \n\
@@ -96,7 +109,6 @@ fn licensing() -> String {
          GNU GENERAL PUBLIC LICENSE\n\
          \n\
          {}",
-        env!("CARGO_PKG_AUTHORS").replace(':', ", "),
         atari::FONT_LICENSE,
         retro_sdl::ui_font::FALLBACK_LICENSE,
         include_str!("../THIRD_PARTY.txt"),

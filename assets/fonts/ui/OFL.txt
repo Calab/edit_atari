@@ -1,7 +1,7 @@
 Copyright 2012 Google Inc. All Rights Reserved.
-(Noto Sans, https://github.com/notofonts/latin-greek-cyrillic)
+(Noto Sans and Noto Sans Mono, https://github.com/notofonts/latin-greek-cyrillic)
 No Reserved Font Name is declared. Used unmodified as the fallback
-interface font when no system UI font can be loaded.
+interface fonts when no system UI or monospace font can be loaded.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

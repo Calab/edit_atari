@@ -90,7 +90,8 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     let (pw, _) = canvas.output_size()?;
     let (ww, _) = canvas.window().size();
     app.ratio = if ww > 0 { pw as f32 / ww as f32 } else { 1.0 };
-    let mut font = ui_font::UiFont::new(&creator, 15.0 * app.ratio);
+    let mut font = ui_font::UiFont::new(&creator, 15.0 * app.ratio, ui_font::Style::Proportional);
+    let mut mono = ui_font::UiFont::new(&creator, 14.0 * app.ratio, ui_font::Style::Monospace);
     app.set_ui_metrics(font.line_height());
 
     if let Some(p) = file {
@@ -234,7 +235,13 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             atlas = render::build_atlas(&creator, app.spec.machine.as_ref())?;
         }
         let frame = app.frame(canvas.output_size()?);
-        app.draw(&mut canvas, &mut atlas, &mut font, &frame, &clipboard);
+        app.draw(
+            &mut canvas,
+            &mut atlas,
+            (&mut font, &mut mono),
+            &frame,
+            &clipboard,
+        );
         if let Some(path) = std::env::var_os("RETRO_EDITOR_SNAPSHOT") {
             // Test hook: save the first frame as a BMP and exit.
             save_snapshot(&canvas, Path::new(&path))?;
