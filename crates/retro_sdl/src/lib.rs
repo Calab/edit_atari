@@ -118,6 +118,13 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     if std::env::var_os("RETRO_EDITOR_HELP").is_some() {
         app.overlay = app::Overlay::Help;
     }
+    if let Some((x, y)) = std::env::var("RETRO_EDITOR_CONTEXT")
+        .ok()
+        .and_then(|v| v.split_once(',').map(|(a, b)| (a.parse(), b.parse())))
+        .and_then(|(a, b)| Some((a.ok()?, b.ok()?)))
+    {
+        app.menu.context = Some((x, y));
+    }
     if let Some(n) = std::env::var("RETRO_EDITOR_SELECT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -162,19 +169,15 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     // inverse key, wherever the layout puts its symbols.
                     let inverse_key = scancode == Some(Scancode::Grave);
                     let clicked = app.key_down(k, keymod, inverse_key, &ctx);
-                    if clicked
-                        && app.config.key_click
-                        && let (Some(q), Some(samples)) = (&queue, &click)
-                    {
-                        // Drop any backlog so clicks never lag behind typing.
-                        if q.size() > 4096 {
-                            q.clear();
-                        }
-                        let _ = q.queue_audio(samples);
+                    if clicked && app.config.key_click {
+                        play_click(queue.as_ref(), click.as_deref());
                     }
                 }
                 Event::TextInput { text, .. } => {
-                    app.text_input(&text, keyboard_util.mod_state(), &frame.layout)
+                    let typed = app.text_input(&text, keyboard_util.mod_state(), &frame.layout);
+                    if typed && app.config.key_click {
+                        play_click(queue.as_ref(), click.as_deref());
+                    }
                 }
                 Event::MouseButtonDown {
                     mouse_btn: MouseButton::Left,
@@ -187,6 +190,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     );
                     app.mouse_down(px(x), px(y), shift, &frame);
                 }
+                Event::MouseButtonDown {
+                    mouse_btn: MouseButton::Right,
+                    x,
+                    y,
+                    ..
+                } => app.mouse_right(px(x), px(y), &frame),
                 Event::MouseMotion {
                     x, y, mousestate, ..
                 } => app.mouse_move(px(x), px(y), mousestate.left(), &frame),
@@ -222,6 +231,17 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         eprintln!("could not save settings: {e}");
     }
     Ok(())
+}
+
+/// Queue the key-click sound.
+fn play_click(queue: Option<&AudioQueue<f32>>, samples: Option<&[f32]>) {
+    if let (Some(q), Some(s)) = (queue, samples) {
+        // Drop any backlog so clicks never lag behind typing.
+        if q.size() > 4096 {
+            q.clear();
+        }
+        let _ = q.queue_audio(s);
+    }
 }
 
 /// Save the current frame as a BMP image (used by tests and docs).

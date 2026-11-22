@@ -143,8 +143,36 @@ pub const THEME: Theme = Theme {
 /// Which menu is open and which item is highlighted.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MenuState {
+    /// A menu-bar menu.
     pub open: Option<usize>,
+    /// The right-click menu, opened at this pixel position.
+    pub context: Option<(i32, i32)>,
     pub hover: Option<usize>,
+}
+
+impl MenuState {
+    pub fn is_open(&self) -> bool {
+        self.open.is_some() || self.context.is_some()
+    }
+}
+
+/// The right-click menu.
+pub fn context_menu() -> Menu {
+    use Command::*;
+    Menu {
+        title: "",
+        mnemonic: '\0',
+        items: vec![
+            item("Undo", "Ctrl+Z", Undo),
+            item("Redo", "Ctrl+Y", Redo),
+            SEP,
+            item("Cut", "Ctrl+X", Cut),
+            item("Copy", "Ctrl+C", Copy),
+            item("Paste", "Ctrl+V", Paste),
+            SEP,
+            item("Select All", "Ctrl+A", SelectAll),
+        ],
+    }
 }
 
 /// Where things were drawn, for mouse hit-testing.
@@ -176,20 +204,21 @@ pub struct ItemState {
     pub checked: Option<bool>,
 }
 
-/// Draw the bar (and the open menu, if any). `pad` is the basic spacing
-/// unit in pixels. Returns the geometry for hit-testing.
+/// Draw the bar, and the open menu or right-click menu if any. `pad` is
+/// the basic spacing unit in pixels. Returns the geometry for hit-testing.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     canvas: &mut Canvas<Window>,
     font: &mut UiFont,
     menus: &[Menu],
+    context: &Menu,
     state: &MenuState,
-    width: u32,
+    (width, height): (u32, u32),
     pad: i32,
     item_state: &dyn Fn(Command) -> ItemState,
 ) -> Geometry {
     let t = &THEME;
-    let lh = font.line_height();
-    let bar_h = lh + pad;
+    let bar_h = font.line_height() + pad;
     let mut geom = Geometry {
         bar_height: bar_h,
         ..Default::default()
@@ -215,10 +244,41 @@ pub fn draw(
         x += w;
     }
 
-    let Some(open) = state.open else {
-        return geom;
+    let (menu, left, top) = match (state.open, state.context) {
+        (Some(i), _) => (&menus[i], geom.titles[i].x(), bar_h - 1),
+        (None, Some((x, y))) => (context, x, y),
+        (None, None) => return geom,
     };
-    let menu = &menus[open];
+    let (drop, items) = draw_dropdown(
+        canvas,
+        font,
+        menu,
+        state.hover,
+        (left, top),
+        (width as i32, height as i32),
+        pad,
+        item_state,
+    );
+    geom.dropdown = Some(drop);
+    geom.items = items;
+    geom
+}
+
+/// Draw a menu's items in a box at (left, top), moved if needed to stay
+/// inside the window. Returns the box and each item's rectangle.
+#[allow(clippy::too_many_arguments)]
+fn draw_dropdown(
+    canvas: &mut Canvas<Window>,
+    font: &mut UiFont,
+    menu: &Menu,
+    hover: Option<usize>,
+    (left, top): (i32, i32),
+    (win_w, win_h): (i32, i32),
+    pad: i32,
+    item_state: &dyn Fn(Command) -> ItemState,
+) -> (Rect, Vec<Rect>) {
+    let t = &THEME;
+    let row_h = font.line_height() + pad;
     let sep_h = pad;
     let gap = pad * 3;
     let label_w = menu
@@ -238,30 +298,31 @@ pub fn draw(
     let h: i32 = menu
         .items
         .iter()
-        .map(|it| if it.command.is_some() { bar_h } else { sep_h })
+        .map(|it| if it.command.is_some() { row_h } else { sep_h })
         .sum::<i32>()
         + pad / 2;
-    let left = geom.titles[open].x();
-    let drop = Rect::new(left, bar_h - 1, w as u32, h as u32);
+    let left = left.min(win_w - w).max(0);
+    let top = top.min(win_h - h).max(0);
+    let drop = Rect::new(left, top, w as u32, h as u32);
     canvas.set_draw_color(t.bar);
     let _ = canvas.fill_rect(drop);
     canvas.set_draw_color(t.border);
     let _ = canvas.draw_rect(drop);
-    geom.dropdown = Some(drop);
 
-    let mut y = drop.y() + pad / 4;
+    let mut rects = Vec::new();
+    let mut y = top + pad / 4;
     for (i, it) in menu.items.iter().enumerate() {
         let Some(cmd) = it.command else {
             let mid = y + sep_h / 2;
             canvas.set_draw_color(t.border);
             let _ = canvas.draw_line((left + pad / 2, mid), (left + w - pad / 2, mid));
-            geom.items.push(Rect::new(0, 0, 0, 0));
+            rects.push(Rect::new(0, 0, 0, 0));
             y += sep_h;
             continue;
         };
         let st = item_state(cmd);
-        let r = Rect::new(left + 1, y, (w - 2) as u32, bar_h as u32);
-        let hot = state.hover == Some(i) && st.enabled;
+        let r = Rect::new(left + 1, y, (w - 2) as u32, row_h as u32);
+        let hot = hover == Some(i) && st.enabled;
         if hot {
             canvas.set_draw_color(t.highlight);
             let _ = canvas.fill_rect(r);
@@ -276,7 +337,7 @@ pub fn draw(
         let ty = y + pad / 2;
         if st.checked == Some(true) {
             // A tick drawn with lines (not every font has a check mark).
-            let (cx, cy, u) = (left + pad / 2 + pad / 4, y + bar_h / 2, (pad / 4).max(2));
+            let (cx, cy, u) = (left + pad / 2 + pad / 4, y + row_h / 2, (pad / 4).max(2));
             canvas.set_draw_color(color);
             for d in 0..(u / 2).max(1) {
                 let _ = canvas.draw_line((cx, cy + d), (cx + u, cy + u + d));
@@ -286,10 +347,10 @@ pub fn draw(
         font.draw(canvas, left + pad / 2 + check_w, ty, it.label, color);
         let sw = font.measure(it.shortcut);
         font.draw(canvas, left + w - pad - sw, ty, it.shortcut, color);
-        geom.items.push(r);
-        y += bar_h;
+        rects.push(r);
+        y += row_h;
     }
-    geom
+    (drop, rects)
 }
 
 /// The next selectable item after `from` in direction `dir` (+1 / -1).

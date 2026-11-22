@@ -227,6 +227,22 @@ mod tests {
     }
 
     #[test]
+    fn typing_after_a_click_does_not_select() {
+        use retro_core::{EditAction::*, Editor, Pos, WrapMode};
+        let m = Atari::default();
+        let doc = Document::from_lines(vec![b"AB".to_vec()], true);
+        let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
+        let layout = ed.layout(&m, 40, 24);
+        // A mouse click: cursor placed, drag started, released without moving.
+        ed.click(Pos { line: 0, col: 1 }, false);
+        ed.begin_drag();
+        ed.apply(Insert(b'X'), &layout, &m, false);
+        assert!(!ed.has_selection());
+        ed.apply(Insert(b'Y'), &layout, &m, false);
+        assert_eq!(ed.doc.line(0), b"AXYB");
+    }
+
+    #[test]
     fn font_has_expected_shapes() {
         let a = Atari::default();
         assert_eq!(a.glyph(b' '), [0; 8]);

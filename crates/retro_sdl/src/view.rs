@@ -52,9 +52,16 @@ impl App {
         // Menu bar last, so an open menu covers the text.
         let menus = std::mem::take(&mut self.menus);
         let state = self.menu;
-        self.geom = menu::draw(canvas, font, &menus, &state, f.width, self.pad, &|c| {
-            self.item_state(c, clipboard)
-        });
+        self.geom = menu::draw(
+            canvas,
+            font,
+            &menus,
+            &self.context_menu,
+            &state,
+            (f.width, f.height),
+            self.pad,
+            &|c| self.item_state(c, clipboard),
+        );
         self.menus = menus;
     }
 

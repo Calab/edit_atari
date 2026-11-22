@@ -268,6 +268,14 @@ impl Editor {
         }
 
         self.want_x = Option::None;
+        // Any edit ends the selection (even an empty one left by a click).
+        if matches!(
+            action,
+            Insert(_) | NewLine | Backspace | DeleteForward | InsertSpace
+        ) && !self.has_selection()
+        {
+            self.anchor = Option::None;
+        }
         match action {
             Insert(code) => {
                 self.checkpoint(Some(Group::Typing));

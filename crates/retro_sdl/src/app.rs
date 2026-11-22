@@ -23,6 +23,7 @@ pub enum Overlay {
 /// Pixel layout of the window for one frame.
 pub struct Frame {
     pub width: u32,
+    pub height: u32,
     /// Pixels per character cell.
     pub cell: u32,
     /// Top of the text area (bottom of the menu bar).
@@ -53,6 +54,7 @@ pub struct App {
     /// A number being typed into the status bar (line length warning).
     pub prompt: Option<String>,
     pub menus: Vec<Menu>,
+    pub context_menu: Menu,
     pub menu: MenuState,
     /// Where the menus were last drawn.
     pub geom: Geometry,
@@ -101,6 +103,7 @@ impl App {
             overlay_top: 0,
             prompt: None,
             menus: menu::menus(alt_charset),
+            context_menu: menu::context_menu(),
             menu: MenuState::default(),
             geom: Geometry::default(),
             ratio: 1.0,
@@ -135,6 +138,7 @@ impl App {
         };
         Frame {
             width,
+            height,
             cell,
             text_top,
             status_top,
@@ -472,22 +476,42 @@ impl App {
         self.menu = MenuState::default();
     }
 
+    /// The menu currently showing its items (menu-bar or right-click).
+    fn open_items(&self) -> Option<&Menu> {
+        match (self.menu.open, self.menu.context) {
+            (Some(i), _) => Some(&self.menus[i]),
+            (None, Some(_)) => Some(&self.context_menu),
+            (None, None) => None,
+        }
+    }
+
+    /// The command of item `i` in the open menu.
+    fn open_command(&self, i: usize) -> Option<Command> {
+        self.open_items()?.items.get(i)?.command
+    }
+
     fn menu_key(&mut self, k: Keycode, ctx: &Ctx) {
-        let Some(open) = self.menu.open else { return };
         let n = self.menus.len();
         match k {
             Keycode::ESCAPE | Keycode::F10 => self.close_menu(),
-            Keycode::LEFT => self.open_menu((open + n - 1) % n),
-            Keycode::RIGHT => self.open_menu((open + 1) % n),
+            Keycode::LEFT | Keycode::RIGHT => {
+                if let Some(open) = self.menu.open {
+                    let next = if k == Keycode::LEFT {
+                        open + n - 1
+                    } else {
+                        open + 1
+                    };
+                    self.open_menu(next % n);
+                }
+            }
             Keycode::UP | Keycode::DOWN => {
                 let dir = if k == Keycode::UP { -1 } else { 1 };
-                self.menu.hover = menu::step(&self.menus[open], self.menu.hover, dir);
+                if let Some(m) = self.open_items() {
+                    self.menu.hover = menu::step(m, self.menu.hover, dir);
+                }
             }
             Keycode::RETURN | Keycode::KP_ENTER | Keycode::SPACE => {
-                let cmd = self
-                    .menu
-                    .hover
-                    .and_then(|h| self.menus[open].items[h].command);
+                let cmd = self.menu.hover.and_then(|h| self.open_command(h));
                 self.close_menu();
                 if let Some(c) = cmd {
                     self.command(c, ctx);
@@ -506,10 +530,11 @@ impl App {
         }
     }
 
-    /// Typed text (from the OS keyboard layout).
-    pub fn text_input(&mut self, text: &str, held: Mod, layout: &Layout) {
-        if std::mem::take(&mut self.swallow_text) || self.menu.open.is_some() {
-            return;
+    /// Typed text (from the OS keyboard layout). Returns true if it
+    /// typed anything (and so should click).
+    pub fn text_input(&mut self, text: &str, held: Mod, layout: &Layout) -> bool {
+        if std::mem::take(&mut self.swallow_text) || self.menu.is_open() {
+            return false;
         }
         if let Some(input) = &mut self.prompt {
             for c in text.chars().filter(char::is_ascii_digit) {
@@ -517,18 +542,21 @@ impl App {
                     input.push(c);
                 }
             }
-            return;
+            return false;
         }
         let ctrl_held = held.intersects(Mod::LCTRLMOD | self.atari_ctrl_mod());
+        let mut typed = false;
         if self.overlay == Overlay::None && !ctrl_held {
             for c in text.chars() {
-                self.machine_key(KeyInput::plain(Key::Char(c)), layout);
+                typed |= self.machine_key(KeyInput::plain(Key::Char(c)), layout);
             }
         }
+        typed
     }
 
     /// Send a key to the machine's keyboard rules and apply the result.
-    fn machine_key(&mut self, input: KeyInput, layout: &Layout) {
+    /// Returns false if the key means nothing to the machine.
+    fn machine_key(&mut self, input: KeyInput, layout: &Layout) -> bool {
         let action = self.spec.keyboard.handle(input);
         if action != EditAction::None {
             self.message = None;
@@ -539,19 +567,38 @@ impl App {
         if let Some(note) = self.editor.take_note() {
             self.message = Some(note);
         }
+        action != EditAction::None
     }
 
     /// Handle a key press. `inverse_key` is set for the key left of 1.
     /// Returns true if it should click.
     pub fn key_down(&mut self, k: Keycode, m: Mod, inverse_key: bool, ctx: &Ctx) -> bool {
         self.swallow_text = inverse_key;
+        // With NumLock off, the number pad is a second set of cursor keys.
+        let k = if m.contains(Mod::NUMMOD) {
+            k
+        } else {
+            match k {
+                Keycode::KP_8 => Keycode::UP,
+                Keycode::KP_2 => Keycode::DOWN,
+                Keycode::KP_4 => Keycode::LEFT,
+                Keycode::KP_6 => Keycode::RIGHT,
+                Keycode::KP_7 => Keycode::HOME,
+                Keycode::KP_1 => Keycode::END,
+                Keycode::KP_9 => Keycode::PAGEUP,
+                Keycode::KP_3 => Keycode::PAGEDOWN,
+                Keycode::KP_0 => Keycode::INSERT,
+                Keycode::KP_PERIOD => Keycode::DELETE,
+                other => other,
+            }
+        };
         let atari_ctrl = m.intersects(self.atari_ctrl_mod());
         let editor_ctrl = m.intersects(Mod::LCTRLMOD) && !atari_ctrl;
         let shift = m.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
         let alt = m.intersects(Mod::LALTMOD | Mod::RALTMOD) && !atari_ctrl;
         let layout = &ctx.frame.layout;
 
-        if self.menu.open.is_some() {
+        if self.menu.is_open() {
             self.menu_key(k, ctx);
             self.swallow_text = true;
             return false;
@@ -637,7 +684,10 @@ impl App {
             return false;
         }
 
+        // Function keys only act on their own: Shift+F4 is not F4.
+        let plain = !shift && !alt && !atari_ctrl;
         let fkey = match k {
+            _ if !plain => None,
             Keycode::F1 => Some(Command::KeyHelp),
             Keycode::F2 => Some(Command::Save),
             Keycode::F4 => Some(Command::ToggleWrap),
@@ -651,7 +701,7 @@ impl App {
             self.command(c, ctx);
             return false;
         }
-        if k == Keycode::F10 {
+        if k == Keycode::F10 && plain {
             self.open_menu(0);
             return false;
         }
@@ -684,13 +734,14 @@ impl App {
                 if atari_ctrl && printable {
                     Key::Control(char::from(code as u8))
                 } else {
-                    // Printable keys arrive as TextInput; still click for them.
-                    return printable;
+                    // Printable keys arrive as TextInput, which decides
+                    // whether to click; other keys (F-keys with Shift, etc.)
+                    // do nothing.
+                    return false;
                 }
             }
         };
-        self.machine_key(KeyInput { key, mods }, layout);
-        true
+        self.machine_key(KeyInput { key, mods }, layout)
     }
 
     // ----- mouse -------------------------------------------------------------
@@ -712,12 +763,12 @@ impl App {
             } else {
                 self.menu = MenuState {
                     open: Some(i),
-                    hover: None,
+                    ..Default::default()
                 };
             }
             return;
         }
-        if self.menu.open.is_some() {
+        if self.menu.is_open() {
             if !self.geom.in_dropdown(x, y) {
                 self.close_menu();
             }
@@ -736,14 +787,37 @@ impl App {
         }
     }
 
+    /// Right button: move the cursor there (unless clicking inside the
+    /// selection) and open the right-click menu.
+    pub fn mouse_right(&mut self, x: i32, y: i32, f: &Frame) {
+        self.close_menu();
+        if self.overlay != Overlay::None
+            || self.prompt.is_some()
+            || y < f.text_top
+            || y >= f.status_top
+        {
+            return;
+        }
+        let pos = self.pos_at(x, y, f);
+        let in_selection = self
+            .editor
+            .selection()
+            .is_some_and(|(a, b)| pos >= a && pos <= b);
+        if !in_selection {
+            self.editor.click(pos, false);
+        }
+        self.menu.context = Some((x, y));
+    }
+
     pub fn mouse_move(&mut self, x: i32, y: i32, left_held: bool, f: &Frame) {
-        if self.menu.open.is_some() {
-            if let Some(i) = self.geom.title_at(x, y)
+        if self.menu.is_open() {
+            if self.menu.open.is_some()
+                && let Some(i) = self.geom.title_at(x, y)
                 && self.menu.open != Some(i)
             {
                 self.menu = MenuState {
                     open: Some(i),
-                    hover: None,
+                    ..Default::default()
                 };
             } else if self.geom.in_dropdown(x, y) {
                 self.menu.hover = self.geom.item_at(x, y);
@@ -758,14 +832,12 @@ impl App {
     }
 
     pub fn mouse_up(&mut self, x: i32, y: i32, ctx: &Ctx) {
-        self.dragging = false;
-        if let Some(open) = self.menu.open
-            && self.geom.in_dropdown(x, y)
-        {
-            let cmd = self
-                .geom
-                .item_at(x, y)
-                .and_then(|i| self.menus[open].items[i].command);
+        if std::mem::take(&mut self.dragging) && !self.editor.has_selection() {
+            // A click without a drag selects nothing.
+            self.editor.clear_selection();
+        }
+        if self.menu.is_open() && self.geom.in_dropdown(x, y) {
+            let cmd = self.geom.item_at(x, y).and_then(|i| self.open_command(i));
             if let Some(c) = cmd
                 && self.item_state(c, ctx.clipboard).enabled
             {
