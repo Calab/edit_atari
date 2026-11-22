@@ -634,11 +634,9 @@ impl FileFormat for TokenizedBasic {
         self.list(bytes).ok().map(|(_, misfit)| misfit)
     }
 
-    /// The dialects with a tokenizer so far.
+    /// Every dialect has a tokenizer (see `crate::tokenize`).
     fn can_encode(&self) -> bool {
-        [&ATARI_BASIC, &TURBO_BASIC_XL, &ALTIRRA_EXTENDED_BASIC]
-            .iter()
-            .any(|d| std::ptr::eq(self.dialect, *d))
+        true
     }
 
     fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {

@@ -1,11 +1,12 @@
 //! Read Atari BASIC programs, tokenize their listings again and compare
 //! with the original statement bytes, line by line.
 //!
-//!     cargo run -p atari --example retokenize -- [-v] [--as=ab|tb|ax] FILE.BAS...
+//!     cargo run -p atari --example retokenize -- [-v] [--as=ab|tb|ax|al|xl|xe|ap] FILE.BAS...
 
 use atari::basic::{
-    ALTIRRA_EXTENDED_BASIC, ALTIRRA_EXTENDED_BASIC_FILE, ATARI_BASIC, ATARI_BASIC_FILE,
-    TURBO_BASIC_XL, TURBO_BASIC_XL_FILE,
+    ALTIRRA_BASIC, ALTIRRA_BASIC_FILE, ALTIRRA_EXTENDED_BASIC, ALTIRRA_EXTENDED_BASIC_FILE,
+    ATARI_BASIC, ATARI_BASIC_FILE, BASIC_A_PLUS, BASIC_A_PLUS_FILE, BASIC_XE, BASIC_XE_FILE,
+    BASIC_XL, BASIC_XL_FILE, TURBO_BASIC_XL, TURBO_BASIC_XL_FILE,
 };
 use atari::tokenize::{program_parts, tokenize_with_variables};
 use retro_core::FileFormat;
@@ -27,6 +28,10 @@ fn main() {
     let (dialect, file) = match std::env::args().find(|a| a.starts_with("--as=")).as_deref() {
         Some("--as=tb") => (&TURBO_BASIC_XL, &TURBO_BASIC_XL_FILE),
         Some("--as=ax") => (&ALTIRRA_EXTENDED_BASIC, &ALTIRRA_EXTENDED_BASIC_FILE),
+        Some("--as=al") => (&ALTIRRA_BASIC, &ALTIRRA_BASIC_FILE),
+        Some("--as=xl") => (&BASIC_XL, &BASIC_XL_FILE),
+        Some("--as=xe") => (&BASIC_XE, &BASIC_XE_FILE),
+        Some("--as=ap") => (&BASIC_A_PLUS, &BASIC_A_PLUS_FILE),
         _ => (&ATARI_BASIC, &ATARI_BASIC_FILE),
     };
     let (mut files_ok, mut total_lines, mut bad_lines) = (0, 0, 0);

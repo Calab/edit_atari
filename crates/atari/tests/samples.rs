@@ -246,7 +246,10 @@ fn text_languages_open_as_text() {
 /// as valid source, so are skipped.
 #[test]
 fn programs_tokenize_back_exactly() {
-    use atari::basic::{ALTIRRA_EXTENDED_BASIC, ATARI_BASIC, TURBO_BASIC_XL};
+    use atari::basic::{
+        ALTIRRA_BASIC, ALTIRRA_EXTENDED_BASIC, ATARI_BASIC, BASIC_A_PLUS, BASIC_XE, BASIC_XL,
+        TURBO_BASIC_XL,
+    };
     use atari::tokenize::{program_parts, tokenize_with_variables};
     for (dir, dialect, file) in [
         ("Atari BASIC", &ATARI_BASIC, &ATARI_BASIC_FILE),
@@ -256,6 +259,10 @@ fn programs_tokenize_back_exactly() {
             &ALTIRRA_EXTENDED_BASIC,
             &ALTIRRA_EXTENDED_BASIC_FILE,
         ),
+        ("Altirra BASIC", &ALTIRRA_BASIC, &ALTIRRA_BASIC_FILE),
+        ("OSS BASIC XL-XE/BASIC XL", &BASIC_XL, &BASIC_XL_FILE),
+        ("OSS BASIC XL-XE/BASIC XE", &BASIC_XE, &BASIC_XE_FILE),
+        ("OSS BASIC A+", &BASIC_A_PLUS, &BASIC_A_PLUS_FILE),
     ] {
         for p in programs(dir) {
             let bytes = std::fs::read(&p).unwrap();
@@ -266,8 +273,13 @@ fn programs_tokenize_back_exactly() {
             let (names, original) = program_parts(&bytes).unwrap();
             let ours = tokenize_with_variables(dialect, &d.lines, names)
                 .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            // Only lines that were ERROR- lines already may come out as them.
+            let had_errors = d
+                .lines
+                .iter()
+                .any(|l| l.windows(6).any(|w| w.eq_ignore_ascii_case(b"ERROR-")));
             assert!(
-                ours.error_lines.is_empty(),
+                ours.error_lines.is_empty() || had_errors,
                 "{}: {:?}",
                 p.display(),
                 ours.error_lines

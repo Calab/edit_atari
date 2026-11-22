@@ -16,7 +16,9 @@
 //! `ERROR-` statement holding the text, with the character where the
 //! error was found in inverse video.
 
-use crate::basic::{ALTIRRA_EXTENDED_BASIC, Dialect, TURBO_BASIC_XL};
+use crate::basic::{
+    ALTIRRA_BASIC, ALTIRRA_EXTENDED_BASIC, BASIC_A_PLUS, BASIC_XL, Dialect, TURBO_BASIC_XL,
+};
 
 const NUMBER: u8 = 0x0E;
 const STRING: u8 = 0x0F;
@@ -48,15 +50,8 @@ const ARRAY_COMMA: u8 = 0x3C;
 const FIRST_VARIABLE: u8 = 0x80;
 const EOL: u8 = 0x9B;
 
-/// Statement tokens with their own syntax.
-const REM: u8 = 0x00;
-const DATA: u8 = 0x01;
-const LET: u8 = 0x06;
-const IF: u8 = 0x07;
-const FOR: u8 = 0x08;
-const COM: u8 = 0x10;
-const DIM: u8 = 0x14;
-const ON: u8 = 0x1E;
+/// Atari BASIC's implied LET and ERROR- tokens (other dialects' are
+/// found by name).
 const IMPLIED_LET: u8 = 0x36;
 const ERROR: u8 = 0x37;
 
@@ -140,6 +135,21 @@ pub(crate) struct Grammar {
     signed: &'static [u8],
     /// The `--` statement (listed as a line of dashes).
     dashes: Option<u8>,
+    /// The implied LET (`A=1`) and ERROR- statement tokens.
+    implied_let: u8,
+    error: u8,
+    /// Expression tokens differ from Atari BASIC's: maps Atari BASIC's
+    /// token for an operator to this dialect's (BASIC A+).
+    op_map: Option<fn(u8) -> u8>,
+    /// Token for USING (PRINT USING, PROCEDURE ... USING), which can start
+    /// an item in a list.
+    using: Option<u8>,
+    /// Keywords may be in any case (BASIC XL/XE list them as `Print`).
+    any_case: bool,
+    /// Strings join with `,` in a string assignment: `A$=B$,"X"` (OSS).
+    string_commas: bool,
+    /// A keyword followed by `=` is a variable (BASIC A+: RENUM=I).
+    keyword_variables: bool,
 }
 
 pub(crate) fn grammar(d: &Dialect) -> Grammar {
@@ -157,6 +167,17 @@ pub(crate) fn grammar(d: &Dialect) -> Grammar {
         max_variables: 128,
         signed: &[],
         dashes: None,
+        implied_let: (0..=u8::MAX)
+            .find(|&t| d.statement(t) == Some(""))
+            .unwrap_or(IMPLIED_LET),
+        error: (0..=u8::MAX)
+            .find(|&t| d.statement(t).is_some_and(|n| n.starts_with("ERROR-")))
+            .unwrap_or(ERROR),
+        op_map: None,
+        using: None,
+        any_case: false,
+        string_commas: false,
+        keyword_variables: false,
     };
     if d.extends(&TURBO_BASIC_XL) {
         g.functions.extend([
@@ -204,9 +225,102 @@ pub(crate) fn grammar(d: &Dialect) -> Grammar {
             ("ERR", 0x72, false, Args::Paren),
         ]);
     }
+    // Altirra BASIC and BASIC XL/XE: BASIC XL's extensions (Altirra BASIC
+    // has a subset), in BASIC XL's numbering.
+    let altirra = d.extends(&ALTIRRA_BASIC);
+    let xl = d.extends(&BASIC_XL);
+    if altirra || xl {
+        g.functions.extend([
+            ("BUMP(", 0x5A, false, Args::OwnParen),
+            ("HEX$", 0x5C, true, Args::Paren),
+            ("DPEEK", 0x5E, false, Args::Paren),
+            ("VSTICK", 0x60, false, Args::Paren),
+            ("HSTICK", 0x61, false, Args::Paren),
+            ("PMADR", 0x62, false, Args::Paren),
+            ("ERR", 0x63, false, Args::Paren),
+        ]);
+        g.operators = vec![("%", 0x56), ("!", 0x57), ("&", 0x58)];
+        g.hex_number = Some(0x0D);
+        g.if_without_then = true;
+    }
+    if xl {
+        g.functions.extend([
+            ("FIND(", 0x5B, false, Args::OwnParen),
+            ("RANDOM(", 0x5D, false, Args::OwnParen),
+            ("SYS", 0x5F, false, Args::Paren),
+            ("TAB", 0x64, false, Args::Paren),
+            ("PEN", 0x65, false, Args::Paren),
+            ("LEFT$(", 0x66, true, Args::OwnParen),
+            ("RIGHT$(", 0x67, true, Args::OwnParen),
+            ("MID$(", 0x68, true, Args::OwnParen),
+        ]);
+        g.using = Some(0x55);
+        g.any_case = true;
+        g.string_commas = true;
+    }
+    // BASIC A+: its own function numbers, and USING, ! and & inserted
+    // among the operators, moving the rest along (see `a_plus_op`).
+    if d.extends(&BASIC_A_PLUS) {
+        g.functions = [
+            ("STR$", 0x40, true),
+            ("CHR$", 0x41, true),
+            ("USR", 0x42, false),
+            ("ASC", 0x43, false),
+            ("VAL", 0x44, false),
+            ("LEN", 0x45, false),
+            ("ADR", 0x46, false),
+            ("BUMP", 0x47, false),
+            ("FIND", 0x48, false),
+            ("DPEEK", 0x49, false),
+            ("ATN", 0x4A, false),
+            ("COS", 0x4B, false),
+            ("PEEK", 0x4C, false),
+            ("SIN", 0x4D, false),
+            ("RND", 0x4E, false),
+            ("FRE", 0x4F, false),
+            ("EXP", 0x50, false),
+            ("LOG", 0x51, false),
+            ("CLOG", 0x52, false),
+            ("SQR", 0x53, false),
+            ("SGN", 0x54, false),
+            ("ABS", 0x55, false),
+            ("INT", 0x56, false),
+            ("SYS", 0x57, false),
+            ("PADDLE", 0x58, false),
+            ("STICK", 0x59, false),
+            ("PTRIG", 0x5A, false),
+            ("STRIG", 0x5B, false),
+            ("VSTICK", 0x5C, false),
+            ("HSTICK", 0x5D, false),
+            ("PMADR", 0x5E, false),
+            ("ERR", 0x5F, false),
+            ("TAB", 0x60, false),
+            ("PEN", 0x61, false),
+        ]
+        .iter()
+        .map(|&(n, t, s)| (n, t, s, Args::Paren))
+        .collect();
+        g.operators = vec![("!", 0x2C), ("&", 0x2D)];
+        g.using = Some(0x1C);
+        g.op_map = Some(a_plus_op);
+        g.if_without_then = true;
+        g.string_commas = true;
+        g.keyword_variables = true;
+    }
     g.functions
         .sort_by_key(|&(name, _, _, args)| (std::cmp::Reverse(name.len()), args != Args::Paren));
     g
+}
+
+/// BASIC A+'s number for an expression token given by Atari BASIC's: the
+/// same up to THEN; then USING at $1C moves # ... AND up by one, and ! and
+/// & after AND move ( ... the array comma up by three.
+fn a_plus_op(t: u8) -> u8 {
+    match t {
+        0x1C..=0x2A => t + 1,
+        0x2B..=0x3C => t + 3,
+        _ => t,
+    }
 }
 
 /// A tokenized program.
@@ -267,7 +381,7 @@ pub fn tokenize_with_variables(
             Ok(body) => body,
             Err(at) => {
                 error_lines.push(number);
-                error_line(text, at)
+                error_line(text, at, g.error)
             }
         };
         let len = body.len() + 3;
@@ -299,12 +413,12 @@ fn trim_start(s: &[u8]) -> &[u8] {
 }
 
 /// An ERROR- line: the text as typed, the character at `at` in inverse.
-fn error_line(text: &[u8], at: usize) -> Vec<u8> {
+fn error_line(text: &[u8], at: usize, error: u8) -> Vec<u8> {
     let mut raw = text.to_vec();
     if let Some(c) = raw.get_mut(at) {
         *c |= 0x80;
     }
-    let mut body = vec![0, ERROR];
+    let mut body = vec![0, error];
     body.extend(raw);
     body.push(EOL);
     body[0] = body.len() as u8 + 3;
@@ -400,6 +514,13 @@ impl<'a, 'v> Parser<'a, 'v> {
         }
     }
 
+    /// Write an expression token given by its Atari BASIC number, in this
+    /// dialect's numbering.
+    fn op(&mut self, t: u8) {
+        let t = self.g.op_map.map_or(t, |f| f(t));
+        self.out.push(t);
+    }
+
     fn peek(&self) -> Option<u8> {
         self.s.get(self.i).copied()
     }
@@ -418,11 +539,27 @@ impl<'a, 'v> Parser<'a, 'v> {
         Err(self.i)
     }
 
+    /// Whether the text at `at` starts with keyword `word`, in the
+    /// dialect's case rules.
+    fn keyword_at(&self, at: usize, word: &[u8]) -> bool {
+        let rest = &self.s[at.min(self.s.len())..];
+        if self.g.any_case {
+            rest.len() >= word.len() && rest[..word.len()].eq_ignore_ascii_case(word)
+        } else {
+            rest.starts_with(word)
+        }
+    }
+
+    /// Whether the text continues with keyword `word` (no spaces skipped).
+    fn at_keyword(&self, word: &[u8]) -> bool {
+        self.keyword_at(self.i, word)
+    }
+
     /// If the text continues with `word` (after spaces), consume it.
     fn eat(&mut self, word: &[u8]) -> bool {
         let save = self.i;
         self.skip_spaces();
-        if self.s[self.i..].starts_with(word) {
+        if self.at_keyword(word) {
             self.i += word.len();
             true
         } else {
@@ -433,6 +570,15 @@ impl<'a, 'v> Parser<'a, 'v> {
 
     /// The whole line: statements separated by `:`.
     fn line(mut self) -> Result<Vec<u8>, Fail> {
+        // A line LIST showed as ERROR- goes back as one, with its text.
+        if self.at_keyword(b"ERROR-") {
+            let text = trim_start(&self.s[6..]);
+            let mut body = vec![0, self.g.error];
+            body.extend_from_slice(text);
+            body.push(EOL);
+            body[0] = body.len() as u8 + 3;
+            return Ok(body);
+        }
         loop {
             self.skip_spaces();
             let start = self.out.len();
@@ -456,27 +602,33 @@ impl<'a, 'v> Parser<'a, 'v> {
     fn statement(&mut self) -> Result<bool, Fail> {
         let token = self.statement_keyword();
         self.out.push(token);
-        match token {
-            REM | DATA => {
+        // Special statements by name: the dialects number them differently.
+        let name = match self.d.statement(token) {
+            _ if token == self.g.implied_let => "LET",
+            Some(n) => n,
+            None => "",
+        };
+        match name {
+            "REM" | "DATA" => {
                 self.skip_spaces();
                 self.out.extend_from_slice(&self.s[self.i..]);
                 self.out.push(EOL);
                 self.i = self.s.len();
                 return Ok(true);
             }
-            LET | IMPLIED_LET => self.assignment()?,
-            FOR => {
+            "LET" => self.assignment()?,
+            "FOR" => {
                 self.target()?;
                 self.expect(b"=", ASSIGN_NUM)?;
                 self.expression()?;
                 self.expect(b"TO", TO)?;
                 self.expression()?;
                 if self.eat(b"STEP") {
-                    self.out.push(STEP);
+                    self.op(STEP);
                     self.expression()?;
                 }
             }
-            IF => {
+            "IF" => {
                 self.expression()?;
                 if !self.eat(b"THEN") {
                     if self.g.if_without_then {
@@ -486,7 +638,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                     self.skip_spaces();
                     return self.fail();
                 }
-                self.out.push(THEN);
+                self.op(THEN);
                 self.skip_spaces();
                 if self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     self.number()?;
@@ -497,7 +649,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                     return Ok(false);
                 }
             }
-            ON => {
+            "ON" => {
                 self.expression()?;
                 let target = self.g.on_targets.iter().find(|(w, _)| {
                     let save = self.i;
@@ -513,11 +665,11 @@ impl<'a, 'v> Parser<'a, 'v> {
                 self.out.push(token);
                 self.list()?;
             }
-            t if Some(t) == self.g.dashes => {
+            _ if Some(token) == self.g.dashes => {
                 self.skip_spaces();
                 return if self.at_end() { Ok(true) } else { self.fail() };
             }
-            t if self.g.signed.contains(&t) => {
+            _ if self.g.signed.contains(&token) => {
                 self.skip_spaces();
                 match self.peek() {
                     Some(b'+') => {
@@ -531,7 +683,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                     _ => {}
                 }
             }
-            DIM | COM => self.dimensions()?,
+            "DIM" | "COM" => self.dimensions()?,
             _ => self.list()?,
         }
         self.end_of_statement()
@@ -541,11 +693,11 @@ impl<'a, 'v> Parser<'a, 'v> {
     fn end_of_statement(&mut self) -> Result<bool, Fail> {
         self.skip_spaces();
         if self.at_end() {
-            self.out.push(EOL_TOKEN);
+            self.op(EOL_TOKEN);
             Ok(true)
         } else if self.peek() == Some(b':') {
             self.i += 1;
-            self.out.push(EOS);
+            self.op(EOS);
             Ok(false)
         } else {
             self.fail()
@@ -554,7 +706,7 @@ impl<'a, 'v> Parser<'a, 'v> {
 
     fn expect(&mut self, word: &[u8], token: u8) -> Result<(), Fail> {
         if self.eat(word) {
-            self.out.push(token);
+            self.op(token);
             Ok(())
         } else {
             self.skip_spaces();
@@ -569,7 +721,7 @@ impl<'a, 'v> Parser<'a, 'v> {
         let rest = &self.s[self.i..];
         let mut best: Option<(u8, usize)> = None;
         for t in 0..=u8::MAX {
-            if t == IMPLIED_LET || t == ERROR {
+            if t == self.g.implied_let || t == self.g.error {
                 continue;
             }
             if Some(t) == self.g.dashes {
@@ -585,11 +737,19 @@ impl<'a, 'v> Parser<'a, 'v> {
                 continue;
             };
             let name = name.as_bytes();
-            if rest.starts_with(name) && best.is_none_or(|(_, len)| name.len() > len) {
+            // On a tie the earlier token wins: BASIC XL stores END as $15;
+            // its END at the end of the table only orders the search.
+            if self.at_keyword(name) && best.is_none_or(|(_, len)| name.len() > len) {
                 best = Some((t, name.len()));
             }
         }
         if let Some((t, len)) = best {
+            // BASIC A+ takes a keyword followed by `=` as a variable:
+            // RENUM=I assigns to RENUM.
+            let after = trim_start(&rest[len..]);
+            if self.g.keyword_variables && after.first() == Some(&b'=') {
+                return self.g.implied_let;
+            }
             self.i += len;
             return t;
         }
@@ -598,16 +758,17 @@ impl<'a, 'v> Parser<'a, 'v> {
             && rest[..dot].iter().all(|c| c.is_ascii_uppercase())
         {
             let prefix = &rest[..dot];
-            for t in (0..=u8::MAX).filter(|&t| t != IMPLIED_LET && t != ERROR) {
+            for t in (0..=u8::MAX).filter(|&t| t != self.g.implied_let && t != self.g.error) {
                 if let Some(name) = self.d.statement(t).filter(|n| !n.is_empty())
-                    && name.as_bytes().starts_with(prefix)
+                    && name.len() >= prefix.len()
+                    && name.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
                 {
                     self.i += dot + 1;
                     return t;
                 }
             }
         }
-        IMPLIED_LET
+        self.g.implied_let
     }
 
     /// `var = expression`, the `=` being an assignment.
@@ -615,6 +776,11 @@ impl<'a, 'v> Parser<'a, 'v> {
         let string = self.target()?;
         self.expect(b"=", if string { ASSIGN_STR } else { ASSIGN_NUM })?;
         self.expression()?;
+        // OSS BASICs join strings with commas: A$=B$,"X",C$(1,2).
+        while string && self.g.string_commas && self.eat(b",") {
+            self.op(COMMA);
+            self.expression()?;
+        }
         Ok(())
     }
 
@@ -638,16 +804,20 @@ impl<'a, 'v> Parser<'a, 'v> {
                 None | Some(b':') => return Ok(()),
                 Some(b',') => {
                     self.i += 1;
-                    self.out.push(COMMA);
+                    self.op(COMMA);
                 }
                 Some(b';') => {
                     self.i += 1;
-                    self.out.push(SEMICOLON);
+                    self.op(SEMICOLON);
                 }
                 Some(b'#') => {
                     self.i += 1;
-                    self.out.push(HASH);
+                    self.op(HASH);
                     self.expression()?;
+                }
+                Some(b'U' | b'u') if self.g.using.is_some() && self.at_keyword(b"USING") => {
+                    self.i += 5;
+                    self.out.push(self.g.using.expect("checked"));
                 }
                 _ => {
                     self.expression()?;
@@ -667,7 +837,7 @@ impl<'a, 'v> Parser<'a, 'v> {
             if !self.eat(b",") {
                 return Ok(());
             }
-            self.out.push(COMMA);
+            self.op(COMMA);
         }
     }
 
@@ -701,7 +871,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                 (false, false) => ARRAY_PAREN,
                 (false, true) => DIM_ARRAY_PAREN,
             };
-            self.out.push(paren);
+            self.op(paren);
             self.inside()?;
         }
         Ok(string)
@@ -716,11 +886,11 @@ impl<'a, 'v> Parser<'a, 'v> {
             match self.peek() {
                 Some(b',') => {
                     self.i += 1;
-                    self.out.push(ARRAY_COMMA);
+                    self.op(ARRAY_COMMA);
                 }
                 Some(b')') => {
                     self.i += 1;
-                    self.out.push(CLOSE_PAREN);
+                    self.op(CLOSE_PAREN);
                     return Ok(());
                 }
                 _ => return self.fail(),
@@ -738,14 +908,14 @@ impl<'a, 'v> Parser<'a, 'v> {
             let rest = &self.s[self.i..];
             if let Some(&(op, num, st)) = RELATIONS.iter().find(|(op, ..)| rest.starts_with(op)) {
                 self.i += op.len();
-                self.out.push(if string { st } else { num });
+                self.op(if string { st } else { num });
                 self.operand()?;
                 string = false;
                 continue;
             }
             if let Some(&(_, t)) = ARITHMETIC.iter().find(|(c, _)| rest.first() == Some(c)) {
                 self.i += 1;
-                self.out.push(t);
+                self.op(t);
                 self.operand()?;
                 string = false;
                 continue;
@@ -754,7 +924,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                 .g
                 .operators
                 .iter()
-                .find(|(op, _)| rest.starts_with(op.as_bytes()))
+                .find(|(op, _)| self.at_keyword(op.as_bytes()))
             {
                 self.i += op.len();
                 self.out.push(t);
@@ -762,12 +932,12 @@ impl<'a, 'v> Parser<'a, 'v> {
                 string = false;
                 continue;
             }
-            if rest.starts_with(b"AND") {
+            if self.at_keyword(b"AND") {
                 self.i += 3;
-                self.out.push(AND);
-            } else if rest.starts_with(b"OR") {
+                self.op(AND);
+            } else if self.at_keyword(b"OR") {
                 self.i += 2;
-                self.out.push(OR);
+                self.op(OR);
             } else {
                 return Ok(string);
             }
@@ -784,23 +954,23 @@ impl<'a, 'v> Parser<'a, 'v> {
         match rest.first() {
             Some(b'+') => {
                 self.i += 1;
-                self.out.push(UNARY_PLUS);
+                self.op(UNARY_PLUS);
                 self.operand()
             }
             Some(b'-') => {
                 self.i += 1;
-                self.out.push(UNARY_MINUS);
+                self.op(UNARY_MINUS);
                 self.operand()
             }
             Some(b'(') => {
                 self.i += 1;
-                self.out.push(OPEN_PAREN);
+                self.op(OPEN_PAREN);
                 let string = self.expression()?;
                 if !self.eat(b")") {
                     self.skip_spaces();
                     return self.fail();
                 }
-                self.out.push(CLOSE_PAREN);
+                self.op(CLOSE_PAREN);
                 Ok(string)
             }
             Some(b'"') => {
@@ -815,17 +985,17 @@ impl<'a, 'v> Parser<'a, 'v> {
                 self.hex()?;
                 Ok(false)
             }
-            Some(_) if rest.starts_with(b"NOT") => {
+            Some(_) if self.at_keyword(b"NOT") => {
                 // NOT binds less tightly than a comparison, so what
                 // follows decides it: NOT A$="X".
                 self.i += 3;
-                self.out.push(NOT);
+                self.op(NOT);
                 self.operand()
             }
             Some(&c) => {
                 let g = self.g;
                 for &(name, token, string, args) in &g.functions {
-                    if !rest.starts_with(name.as_bytes()) {
+                    if !self.at_keyword(name.as_bytes()) {
                         continue;
                     }
                     let after = trim_start(&rest[name.len()..]);
@@ -838,7 +1008,7 @@ impl<'a, 'v> Parser<'a, 'v> {
                         Args::Paren => {
                             self.skip_spaces();
                             self.i += 1;
-                            self.out.push(FUNCTION_PAREN);
+                            self.op(FUNCTION_PAREN);
                             self.inside()?;
                         }
                         Args::OwnParen => self.inside()?,

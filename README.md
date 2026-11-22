@@ -96,9 +96,9 @@ dialect is recognized from the file itself.
   extensions in the table help tell apart dialects that share token numbers
   (Turbo-BASIC XL and BASIC XL, say); File > Reopen As reads a file as
   another format.
-- **Saving**: Atari BASIC, Turbo-BASIC XL and Altirra Extended BASIC
-  programs can be saved tokenized, exactly as those BASICs save them; the
-  other languages are saved as `.LST` text for now.
+- **Saving**: every BASIC except Microsoft BASIC can be saved tokenized,
+  exactly as that BASIC saves it; Microsoft BASIC and MAC/65 are saved as
+  `.LST` text for now.
   Save As picks the format from the extension you give, asking which BASIC
   for `.BAS`. File > Save Listing As always saves ATASCII text (a `.LST`
   listing), whatever the name. Lines with syntax errors are saved, if you
