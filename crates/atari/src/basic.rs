@@ -26,6 +26,10 @@ use retro_core::{Decoded, FileFormat};
 pub enum Indent {
     /// No indenting (Atari BASIC, Turbo-BASIC XL).
     None,
+    /// BASIC A+: a line is indented by the blocks open at its start;
+    /// openers and closers take effect from the next line, so `NEXT I`
+    /// stays indented with the block's body.
+    AtLineStart,
     /// BASIC XL: a line starts at the current depth, and each block
     /// opener adds a level right where it appears, even part way through a
     /// line (`Print "X":  While B<1`). Closers take effect from the next
@@ -43,8 +47,11 @@ pub struct Blocks {
     closers: &'static [u8],
     /// Statements that line up with their opener but keep the block open.
     middles: &'static [u8],
+    /// The IF statement and THEN token: IF opens a block only without THEN.
+    if_then: (u8, u8),
 }
 
+/// IF and THEN in Atari BASIC and most descendants (not BASIC A+).
 const IF: u8 = 0x07;
 const THEN: u8 = 0x1B;
 
@@ -160,6 +167,7 @@ pub static ATARI_BASIC: Dialect = Dialect {
         openers: &[0x08],
         closers: &[0x09],
         middles: &[],
+        if_then: (IF, THEN),
     },
 };
 
@@ -201,6 +209,7 @@ pub static TURBO_BASIC_XL: Dialect = Dialect {
         openers: &[0x08, 0x07, 0x3C, 0x3E, 0x45, 0x4F],
         closers: &[0x09, 0x3D, 0x3F, 0x46, 0x51, 0x41],
         middles: &[0x40],
+        if_then: (IF, THEN),
     },
 };
 
@@ -267,6 +276,7 @@ pub static BASIC_XL: Dialect = Dialect {
         openers: &[0x08, 0x07, 0x38],
         closers: &[0x09, 0x39, 0x3D],
         middles: &[0x3C],
+        if_then: (IF, THEN),
     },
 };
 
@@ -309,6 +319,132 @@ pub static BASIC_XE: Dialect = Dialect {
         openers: &[0x08, 0x07, 0x38, 0x59],
         closers: &[0x09, 0x39, 0x3D, 0x5E],
         middles: &[0x3C],
+        if_then: (IF, THEN),
+    },
+};
+
+/// OSS BASIC A+ (3.05), the disk-based forerunner of BASIC XL. Not token
+/// compatible with Atari BASIC: the statements are in a different order,
+/// and USING ($1C) moves the expression tokens after THEN up by one.
+/// Tables read from BASIC.COM on the BASIC A+ 3.05 disk.
+pub static BASIC_A_PLUS: Dialect = Dialect {
+    name: "BASIC A+",
+    base: None,
+    first_statement: 0,
+    statements: &[
+        "REM",
+        "DATA",
+        "INPUT",
+        "LIST",
+        "ENTER",
+        "LET",
+        "IF",
+        "FOR", // $00
+        "NEXT",
+        "GOTO",
+        "RENUM",
+        "GOSUB",
+        "TRAP",
+        "BYE",
+        "CONT",
+        "CLOSE", // $08
+        "CLR",
+        "DEG",
+        "DIM",
+        "WHILE",
+        "ENDWHILE",
+        "TRACEOFF",
+        "TRACE",
+        "ELSE", // $10
+        "ENDIF",
+        "END",
+        "NEW",
+        "OPEN",
+        "LOAD",
+        "SAVE",
+        "STATUS",
+        "NOTE", // $18
+        "POINT",
+        "XIO",
+        "ON",
+        "POKE",
+        "DPOKE",
+        "PRINT",
+        "RAD",
+        "READ", // $20
+        "RESTORE",
+        "RETURN",
+        "RUN",
+        "STOP",
+        "POP",
+        "?",
+        "GET",
+        "PUT", // $28
+        "LOMEM",
+        "DEL",
+        "RPUT",
+        "RGET",
+        "BPUT",
+        "BGET",
+        "TAB",
+        "CP", // $30
+        "DOS",
+        "ERASE",
+        "PROTECT",
+        "UNPROTECT",
+        "DIR",
+        "RENAME",
+        "MOVE",
+        "COLOR", // $38
+        "GRAPHICS",
+        "PLOT",
+        "POSITION",
+        "DRAWTO",
+        "SETCOLOR",
+        "LOCATE",
+        "SOUND",
+        "LPRINT", // $40
+        "CSAVE",
+        "CLOAD",
+        "MISSILE",
+        "PMCLR",
+        "PMCOLOR",
+        "PMGRAPHICS",
+        "PMMOVE",
+        "PMWIDTH", // $48
+        "SET",
+        "LVAR",
+        "",
+        "ERROR-  ", // $50
+    ],
+    raw_statements: &[0x00, 0x01, 0x53],
+    first_operator: FIRST_OPERATOR,
+    operators: &[
+        ",", "$", ":", ";", "", "GOTO", "GOSUB", "TO", "STEP", "THEN", "USING", "#", // $12
+        "<=", "<>", ">=", "<", ">", "=", "^", "*", "+", "-", "/", // $1E
+        "NOT", "OR", "AND", "!", "&", "(", ")", "=", "=", // $29
+        "<=", "<>", ">=", "<", ">", "=", "+", "-", // $32: string compares, unary
+        "(", "", "", "(", "(",
+        ",", // $3A: string, array, DIM array, function, DIM string ( and array ,
+        "STR$", "CHR$", "USR", "ASC", "VAL", "LEN", "ADR", "BUMP", // $40
+        "FIND", "DPEEK", "ATN", "COS", "PEEK", "SIN", "RND", "FRE", // $48
+        "EXP", "LOG", "CLOG", "SQR", "SGN", "ABS", "INT", "SYS", // $50
+        "PADDLE", "STICK", "PTRIG", "STRIG", "VSTICK", "HSTICK", "PMADR", "ERR", // $58
+        "TAB", "PEN", // $60
+    ],
+    spaced: &[0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x29, 0x2A, 0x2B],
+    hex_number: None,
+    high_variable: None,
+    mixed_case: false,
+    merge_spaces: false,
+    lowercase_hex: false,
+    indent: Indent::AtLineStart,
+    // FOR, IF, WHILE / NEXT, ENDWHILE, ENDIF / ELSE
+    blocks: Blocks {
+        openers: &[0x07, 0x06, 0x13],
+        closers: &[0x08, 0x14, 0x18],
+        middles: &[0x17],
+        if_then: (0x06, THEN),
     },
 };
 
@@ -332,6 +468,11 @@ pub static TURBO_BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
 pub static BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &BASIC_XL,
     extensions: &["BXL"],
+};
+
+pub static BASIC_A_PLUS_FILE: TokenizedBasic = TokenizedBasic {
+    dialect: &BASIC_A_PLUS,
+    extensions: &[],
 };
 
 pub static BASIC_XE_FILE: TokenizedBasic = TokenizedBasic {
@@ -518,7 +659,8 @@ fn list_line(
             list_tokens(d, body, names, &mut text)?
         };
         let b = &d.blocks;
-        let kind = if b.openers.contains(&token) && !(token == IF && ops.contains(&THEN)) {
+        let (if_, then) = b.if_then;
+        let kind = if b.openers.contains(&token) && !(token == if_ && ops.contains(&then)) {
             Block::Open
         } else if b.closers.contains(&token) {
             Block::Close
@@ -534,6 +676,17 @@ fn list_line(
     let indent = |out: &mut Vec<u8>, n: usize| out.extend(std::iter::repeat_n(b' ', 2 * n));
     match d.indent {
         Indent::None => texts.into_iter().for_each(|(_, t)| out.extend(t)),
+        Indent::AtLineStart => {
+            indent(&mut out, *depth);
+            for (kind, t) in texts {
+                match kind {
+                    Block::Open => *depth += 1,
+                    Block::Close => *depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                out.extend(t);
+            }
+        }
         Indent::AtOpeners => {
             indent(&mut out, *depth);
             let mut closes = 0;

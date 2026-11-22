@@ -36,6 +36,7 @@ static FORMATS: &[&dyn FileFormat] = &[
     &basic::TURBO_BASIC_XL_FILE,
     &basic::BASIC_XL_FILE,
     &basic::BASIC_XE_FILE,
+    &basic::BASIC_A_PLUS_FILE,
     &atascii::AtasciiText,
 ];
 

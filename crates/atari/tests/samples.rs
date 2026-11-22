@@ -5,7 +5,9 @@
 
 use std::path::PathBuf;
 
-use atari::basic::{ATARI_BASIC_FILE, BASIC_XE_FILE, BASIC_XL_FILE, TURBO_BASIC_XL_FILE};
+use atari::basic::{
+    ATARI_BASIC_FILE, BASIC_A_PLUS_FILE, BASIC_XE_FILE, BASIC_XL_FILE, TURBO_BASIC_XL_FILE,
+};
 use retro_core::FileFormat;
 
 fn samples(dir: &str) -> Vec<PathBuf> {
@@ -111,6 +113,7 @@ fn reference_listings_match() {
     check_listings("Turbo BASIC XL", &TURBO_BASIC_XL_FILE);
     check_listings("OSS BASIC XL-XE/BASIC XL", &BASIC_XL_FILE);
     check_listings("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE);
+    check_listings("OSS BASIC A+", &BASIC_A_PLUS_FILE);
 }
 
 #[test]
@@ -118,6 +121,7 @@ fn oss_basic_programs_list() {
     for (dir, format) in [
         ("OSS BASIC XL-XE/BASIC XL", &BASIC_XL_FILE),
         ("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE),
+        ("OSS BASIC A+", &BASIC_A_PLUS_FILE),
     ] {
         for p in programs(dir) {
             let bytes = std::fs::read(&p).unwrap();
@@ -139,6 +143,7 @@ fn dialect_detected_from_content() {
         ("Turbo BASIC XL", "Turbo-BASIC XL"),
         ("OSS BASIC XL-XE/BASIC XL", "BASIC XL"),
         ("OSS BASIC XL-XE/BASIC XE", "BASIC XE"),
+        ("OSS BASIC A+", "BASIC A+"),
     ] {
         for p in programs(dir) {
             let bytes = std::fs::read(&p).unwrap();
