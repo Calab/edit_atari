@@ -6,6 +6,7 @@ pub mod basic;
 pub mod click;
 pub mod keyboard;
 pub mod mac65;
+pub mod msbasic;
 pub mod palette;
 
 use retro_core::{FileFormat, Machine, TabStops};
@@ -41,6 +42,7 @@ static FORMATS: &[&dyn FileFormat] = &[
     &basic::BASIC_XE_FILE,
     &basic::BASIC_A_PLUS_FILE,
     &mac65::Mac65,
+    &msbasic::MicrosoftBasic,
     &atascii::AtasciiText,
 ];
 

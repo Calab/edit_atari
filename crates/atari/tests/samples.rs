@@ -55,6 +55,8 @@ fn check_listings(dir: &str, format: &dyn FileFormat) {
         let d = format.decode(&std::fs::read(&prog).unwrap()).unwrap();
         let bytes = std::fs::read(&lst).unwrap();
         let body = bytes.strip_suffix(&[0x9B]).unwrap_or(&bytes);
+        // Microsoft BASIC's LIST starts with a blank line.
+        let body = body.strip_prefix(&[0x9B]).unwrap_or(body);
         let want: Vec<&[u8]> = body.split(|&c| c == 0x9B).collect();
         assert_eq!(d.lines.len(), want.len(), "{}: line count", prog.display());
         for (got, want) in d.lines.iter().zip(want) {
@@ -185,4 +187,35 @@ fn mac65_sources_list() {
         );
     }
     check_listings("MAC-65", &atari::mac65::Mac65);
+}
+
+/// Microsoft BASIC programs read as Microsoft BASIC.
+#[test]
+fn microsoft_basic_programs_list() {
+    use retro_core::{Machine, format};
+    let formats = atari::Atari::default().formats();
+    for p in programs("Microsoft BASIC") {
+        let bytes = std::fs::read(&p).unwrap();
+        if let Err(e) = atari::msbasic::MicrosoftBasic.decode(&bytes) {
+            panic!("{}: {e}", p.display());
+        }
+        assert_eq!(
+            format::detect(formats, &bytes, None).name(),
+            "Microsoft BASIC",
+            "{}",
+            p.display()
+        );
+    }
+    check_listings("Microsoft BASIC", &atari::msbasic::MicrosoftBasic);
+    // MSLOCK is MSTEST saved with SAVE ... LOCK: it lists the same.
+    let read = |name: &str| {
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/Microsoft BASIC")
+            .join(name);
+        std::fs::read(p).ok()
+    };
+    if let (Some(plain), Some(locked)) = (read("MSTEST.BAS"), read("MSLOCK.BAS")) {
+        let mb = &atari::msbasic::MicrosoftBasic;
+        assert_eq!(mb.decode(&locked).unwrap(), mb.decode(&plain).unwrap());
+    }
 }
