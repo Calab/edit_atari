@@ -36,7 +36,7 @@ pub struct ColorModel {
     pub attract: fn((u8, u8), u8) -> (u8, u8),
     pub default_text: (u8, u8),
     pub default_background: (u8, u8),
-    pub border: (u8, u8),
+    pub default_border: (u8, u8),
 }
 
 pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {

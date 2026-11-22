@@ -17,7 +17,7 @@ impl App {
         &mut self,
         canvas: &mut Canvas<Window>,
         atlas: &mut Texture,
-        (font, mono): (&mut UiFont<'t>, &mut UiFont<'t>),
+        (font, mono, small): (&mut UiFont<'t>, &mut UiFont<'t>, &mut UiFont<'t>),
         f: &Frame,
         clipboard: &ClipboardUtil,
     ) {
@@ -76,10 +76,10 @@ impl App {
         if let Some(mut p) = self.prefs.take() {
             p.draw(
                 canvas,
-                font,
+                small,
                 &self.prefs_view(),
                 (f.width, f.height),
-                self.pad,
+                self.prefs_pad,
             );
             self.prefs = Some(p);
         }

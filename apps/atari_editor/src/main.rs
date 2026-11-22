@@ -153,7 +153,7 @@ fn main() -> ExitCode {
             attract: palette::attract,
             default_text: palette::DEFAULT_TEXT,
             default_background: palette::DEFAULT_BACKGROUND,
-            border: palette::BORDER,
+            default_border: palette::BORDER,
         }),
         help: HELP,
         about: about(),

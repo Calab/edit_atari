@@ -57,6 +57,7 @@ pub struct Config {
     /// Text and background colours as (hue, luminance); `None` = default.
     pub text_color: Option<(u8, u8)>,
     pub background_color: Option<(u8, u8)>,
+    pub border_color: Option<(u8, u8)>,
     /// Cycle dim colours after `attract_minutes` without input.
     pub attract_on: bool,
     pub attract_minutes: u32,
@@ -84,7 +85,7 @@ impl Default for Config {
         Self {
             control_key: ControlKey::RightCtrl,
             wrap: WrapMode::Native,
-            scale: 3,
+            scale: 2,
             key_click: true,
             click_volume: 0.25,
             line_warning_on: true,
@@ -96,6 +97,7 @@ impl Default for Config {
             save_on_exit: true,
             text_color: None,
             background_color: None,
+            border_color: None,
             attract_on: true,
             attract_minutes: DEFAULT_ATTRACT_MINUTES,
         }
@@ -195,6 +197,7 @@ impl Config {
                 "save_on_exit" => c.save_on_exit = v != "off",
                 "text_color" => c.text_color = parse_color(v),
                 "background_color" => c.background_color = parse_color(v),
+                "border_color" => c.border_color = parse_color(v),
                 "attract" => c.attract_on = v != "off",
                 "attract_minutes" => {
                     if let Ok(n) = v.parse::<u32>() {
@@ -235,6 +238,7 @@ impl Config {
              # Colours as hue,luminance-level (empty = the machine's default)\n\
              text_color = {}\n\
              background_color = {}\n\
+             border_color = {}\n\
              attract = {}\n\
              attract_minutes = {}\n",
             match self.control_key {
@@ -260,6 +264,7 @@ impl Config {
             on_off(self.save_on_exit),
             color_text(self.text_color),
             color_text(self.background_color),
+            color_text(self.border_color),
             on_off(self.attract_on),
             self.attract_minutes,
         )
@@ -299,6 +304,7 @@ mod tests {
             save_on_exit: false,
             text_color: Some((12, 7)),
             background_color: None,
+            border_color: Some((3, 4)),
             attract_on: false,
             attract_minutes: 9,
         };

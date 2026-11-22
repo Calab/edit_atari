@@ -61,27 +61,17 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     let video = sdl.video()?;
     let mut app = app::App::new(spec);
 
-    // Pick a starting size: the native screen plus a border and room for
-    // the menu and status bars, scaled down if it doesn't fit the display.
+    // The window opens small; its real size is set below, once the
+    // display's pixel density is known.
     let native_cols = app.spec.machine.screen_columns() as u32 + 4;
     let native_rows = 24 + 5;
-    if let Ok(bounds) = video.display_usable_bounds(0) {
-        while app.config.scale > config::MIN_SCALE
-            && (native_cols * 8 * app.config.scale > bounds.width()
-                || native_rows * 8 * app.config.scale > bounds.height())
-        {
-            app.config.scale -= 1;
-        }
-    }
-    let s = app.config.scale * 8;
-    let mut window = video
-        .window(app.spec.title, native_cols * s, native_rows * s)
+    let window = video
+        .window(app.spec.title, native_cols * 8, native_rows * 8)
         .position_centered()
         .resizable()
         .allow_highdpi()
         .build()
         .map_err(|e| e.to_string())?;
-    let _ = window.set_minimum_size(320, 200);
     let mut canvas = window
         .into_canvas()
         .present_vsync()
@@ -96,7 +86,57 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     app.ratio = if ww > 0 { pw as f32 / ww as f32 } else { 1.0 };
     let mut font = ui_font::UiFont::new(&creator, 15.0 * app.ratio, ui_font::Style::Proportional);
     let mut mono = ui_font::UiFont::new(&creator, 14.0 * app.ratio, ui_font::Style::Monospace);
+    // The Preferences page packs a lot in, so it uses a smaller size.
+    let mut small = ui_font::UiFont::new(&creator, 12.0 * app.ratio, ui_font::Style::Proportional);
     app.set_ui_metrics(font.line_height());
+
+    // Size the window. Zoom is in real pixels but window sizes are in
+    // desktop units, which differ on high-DPI displays.
+    //
+    // Start with the machine's screen plus a border and room for the menu
+    // and status bars, lowering the zoom if that doesn't fit the display,
+    // and make it big enough for the Preferences page too. It can't be made
+    // smaller than the screen at 2x zoom.
+    {
+        let to_window = |n: u32| (n as f32 / app.ratio).ceil() as u32;
+        let bounds = video.display_usable_bounds(0).ok();
+        let fit = |w: u32, h: u32| match bounds {
+            Some(b) => (w.min(b.width()), h.min(b.height())),
+            None => (w, h),
+        };
+        let screen = |scale: u32| {
+            (
+                to_window(native_cols * 8 * scale),
+                to_window(native_rows * 8 * scale),
+            )
+        };
+        if let Some(b) = bounds {
+            while app.config.scale > config::MIN_SCALE && {
+                let (w, h) = screen(app.config.scale);
+                w > b.width() || h > b.height()
+            } {
+                app.config.scale -= 1;
+            }
+        }
+
+        let bars = app.bar_height as u32 * 2;
+        let (min_w, min_h) = fit(to_window(native_cols * 16), to_window(24 * 16 + bars));
+        let _ = canvas.window_mut().set_minimum_size(min_w, min_h);
+
+        let (pw, ph) = prefs::page_size(&mut small, app.prefs_pad, &app.prefs_view());
+        let page = (
+            to_window((pw + app.pad * 8) as u32),
+            to_window((ph + app.pad) as u32 + bars),
+        );
+        let (sw, sh) = screen(app.config.scale);
+        let (w, h) = fit(sw.max(page.0).max(min_w), sh.max(page.1).max(min_h));
+        let window = canvas.window_mut();
+        let _ = window.set_size(w, h);
+        window.set_position(
+            sdl2::video::WindowPos::Centered,
+            sdl2::video::WindowPos::Centered,
+        );
+    }
 
     if let Some(p) = file {
         app.open_path(&p);
@@ -271,7 +311,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         app.draw(
             &mut canvas,
             &mut atlas,
-            (&mut font, &mut mono),
+            (&mut font, &mut mono, &mut small),
             &frame,
             &clipboard,
         );

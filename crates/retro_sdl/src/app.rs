@@ -96,6 +96,8 @@ pub struct App {
     pub ratio: f32,
     /// Interface spacing unit and bar height, in pixels.
     pub pad: i32,
+    /// Spacing on the Preferences page, which uses a smaller font.
+    pub prefs_pad: i32,
     pub bar_height: i32,
     /// The dialog box being shown, if any.
     pub dialog: Option<Dialog>,
@@ -149,6 +151,7 @@ impl App {
             geom: Geometry::default(),
             ratio: 1.0,
             pad: 6,
+            prefs_pad: 5,
             bar_height: 24,
             dialog: None,
             file_job: None,
@@ -166,15 +169,16 @@ impl App {
 
     // ----- colours and attract mode -------------------------------------------
 
-    /// The text and background colours as (hue, lum), if the machine has a
-    /// colour model.
-    pub fn color_choice(&self) -> Option<((u8, u8), (u8, u8))> {
+    /// The text, background and border colours as (hue, lum), if the
+    /// machine has a colour model.
+    pub fn color_choice(&self) -> Option<[(u8, u8); 3]> {
         let m = self.spec.colors?;
         let fix = |(h, l): (u8, u8)| (h.min(m.hues - 1), l.min(m.lums - 1));
-        Some((
+        Some([
             fix(self.config.text_color.unwrap_or(m.default_text)),
             fix(self.config.background_color.unwrap_or(m.default_background)),
-        ))
+            fix(self.config.border_color.unwrap_or(m.default_border)),
+        ])
     }
 
     pub fn screen_colors(&self) -> ScreenColors {
@@ -187,7 +191,7 @@ impl App {
             selection: rgb(pal.selection),
             selection_text: rgb(pal.selection_text),
         };
-        if let (Some(m), Some((text, back))) = (self.spec.colors, self.color_choice()) {
+        if let (Some(m), Some([text, back, border])) = (self.spec.colors, self.color_choice()) {
             let look = |hl: (u8, u8)| {
                 let (h, l) = match self.attract {
                     Some(shift) => (m.attract)(hl, shift),
@@ -197,7 +201,7 @@ impl App {
             };
             c.text = look(text);
             c.background = look(back);
-            c.border = look(m.border);
+            c.border = look(border);
         }
         if self.attract.is_some() {
             let half = |c: Color| Color::RGB(c.r / 2, c.g / 2, c.b / 2);
@@ -262,6 +266,7 @@ impl App {
 
     pub fn set_ui_metrics(&mut self, line_height: i32) {
         self.pad = (6.0 * self.ratio).round() as i32;
+        self.prefs_pad = (5.0 * self.ratio).round() as i32;
         self.bar_height = line_height + self.pad;
     }
 
@@ -594,12 +599,13 @@ impl App {
                 .spec
                 .colors
                 .zip(self.color_choice())
-                .map(|(m, (t, b))| {
+                .map(|(m, [t, b, r])| {
                     let show =
                         |(h, l): (u8, u8)| (h, l * m.lum_step, rgb((m.rgb)(h, l)), (m.label)(h, l));
                     prefs::ColorView {
                         text: show(t),
                         background: show(b),
+                        border: show(r),
                     }
                 }),
             attract_on: self.config.attract_on,
@@ -655,13 +661,21 @@ impl App {
                     DirMode::Fixed
                 }
             }
-            (Field::FgHue | Field::FgLum | Field::BgHue | Field::BgLum, Op::Dec | Op::Inc) => {
-                self.step_color(f, op == Op::Inc)
-            }
+            (
+                Field::FgHue
+                | Field::FgLum
+                | Field::BgHue
+                | Field::BgLum
+                | Field::BrdHue
+                | Field::BrdLum,
+                Op::Dec | Op::Inc,
+            ) => self.step_color(f, op == Op::Inc),
             (Field::ResetColors, Op::Press) => {
                 self.config.text_color = None;
                 self.config.background_color = None;
+                self.config.border_color = None;
             }
+            (Field::Defaults, Op::Press) => self.reset_prefs(),
             (Field::AttractOn, Op::Toggle) => self.config.attract_on = !self.config.attract_on,
             (Field::AttractMin, Op::Dec | Op::Inc) => {
                 let d: i64 = if op == Op::Inc { 1 } else { -1 };
@@ -677,14 +691,33 @@ impl App {
         }
     }
 
+    /// Put every setting on the Preferences page back to its default.
+    /// Settings the page doesn't show (the last folder used, the click
+    /// volume) are kept.
+    fn reset_prefs(&mut self) {
+        let d = Config {
+            last_dir: std::mem::take(&mut self.config.last_dir),
+            click_volume: self.config.click_volume,
+            ..Config::default()
+        };
+        self.config = d;
+        self.set_wrap(self.config.wrap == WrapMode::Native);
+        self.set_charset(self.config.charset);
+        self.message = Some("Preferences set to defaults".into());
+    }
+
     /// Step a hue (wrapping round) or luminance (stopping at the ends).
     fn step_color(&mut self, f: Field, up: bool) {
-        let (Some(m), Some((text, back))) = (self.spec.colors, self.color_choice()) else {
+        let (Some(m), Some(colors)) = (self.spec.colors, self.color_choice()) else {
             return;
         };
-        let text_field = matches!(f, Field::FgHue | Field::FgLum);
-        let (mut h, mut l) = if text_field { text } else { back };
-        if matches!(f, Field::FgHue | Field::BgHue) {
+        let which = match f {
+            Field::FgHue | Field::FgLum => 0,
+            Field::BgHue | Field::BgLum => 1,
+            _ => 2,
+        };
+        let (mut h, mut l) = colors[which];
+        if matches!(f, Field::FgHue | Field::BgHue | Field::BrdHue) {
             h = if up {
                 (h + 1) % m.hues
             } else {
@@ -697,11 +730,12 @@ impl App {
                 l.saturating_sub(1)
             };
         }
-        if text_field {
-            self.config.text_color = Some((h, l));
-        } else {
-            self.config.background_color = Some((h, l));
-        }
+        let slot = match which {
+            0 => &mut self.config.text_color,
+            1 => &mut self.config.background_color,
+            _ => &mut self.config.border_color,
+        };
+        *slot = Some((h, l));
     }
 
     /// A key pressed while Preferences is open. Returns true if the key was
@@ -718,7 +752,11 @@ impl App {
             Keycode::DOWN => p.move_focus(1),
             Keycode::ESCAPE => self.close_prefs(),
             Keycode::RETURN | Keycode::KP_ENTER => match f {
-                Field::Browse | Field::SaveNow | Field::Close => self.prefs_apply(f, Op::Press),
+                Field::Browse
+                | Field::ResetColors
+                | Field::Defaults
+                | Field::SaveNow
+                | Field::Close => self.prefs_apply(f, Op::Press),
                 _ => self.close_prefs(),
             },
             Keycode::LEFT | Keycode::RIGHT => {
@@ -739,6 +777,8 @@ impl App {
                         | Field::FgLum
                         | Field::BgHue
                         | Field::BgLum
+                        | Field::BrdHue
+                        | Field::BrdLum
                 ) {
                     self.prefs_apply(f, if fwd { Op::Inc } else { Op::Dec });
                 }

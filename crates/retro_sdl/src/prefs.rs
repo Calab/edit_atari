@@ -21,6 +21,8 @@ pub enum Field {
     FgLum,
     BgHue,
     BgLum,
+    BrdHue,
+    BrdLum,
     ResetColors,
     Charset,
     Click,
@@ -33,6 +35,7 @@ pub enum Field {
     DirPath,
     Browse,
     SaveOnExit,
+    Defaults,
     SaveNow,
     Close,
 }
@@ -43,13 +46,15 @@ fn order(colors: bool) -> Vec<Field> {
     use Field::*;
     let mut v = vec![Wrap, Zoom];
     if colors {
-        v.extend([FgHue, FgLum, BgHue, BgLum, ResetColors]);
+        v.extend([FgHue, FgLum, BgHue, BgLum, BrdHue, BrdLum, ResetColors]);
     }
     v.extend([Charset, Click, ControlKey, WarnOn, WarnCol]);
     if colors {
         v.extend([AttractOn, AttractMin]);
     }
-    v.extend([DirMode, DirPath, Browse, SaveOnExit, SaveNow, Close]);
+    v.extend([
+        DirMode, DirPath, Browse, SaveOnExit, Defaults, SaveNow, Close,
+    ]);
     v
 }
 
@@ -85,11 +90,12 @@ pub struct View<'a> {
     pub attract_min: u32,
 }
 
-/// The text and background colour choices.
+/// The text, background and border colour choices.
 pub struct ColorView {
     /// (hue, luminance as displayed, colour, label such as "$94").
     pub text: (u8, u8, Color, String),
     pub background: (u8, u8, Color, String),
+    pub border: (u8, u8, Color, String),
 }
 
 pub struct Prefs {
@@ -144,45 +150,12 @@ impl Prefs {
         canvas.set_blend_mode(BlendMode::NONE);
 
         let lh = font.line_height();
-        let row = lh + pad * 2 + pad / 2;
-        #[derive(PartialEq)]
-        enum Row {
-            Wrap,
-            Zoom,
-            Text,
-            Background,
-            Charset,
-            Click,
-            ControlKey,
-            Warn,
-            Attract,
-            Dir,
-            DirPath,
-            Save,
-        }
-        let mut rows = vec![("Display width", Row::Wrap), ("Zoom", Row::Zoom)];
-        if v.colors.is_some() {
-            rows.push(("Text color", Row::Text));
-            rows.push(("Background color", Row::Background));
-        }
-        rows.extend([
-            ("Character set", Row::Charset),
-            ("Key click", Row::Click),
-            ("CONTROL key", Row::ControlKey),
-            ("Line length warning", Row::Warn),
-        ]);
-        if v.colors.is_some() {
-            rows.push(("Attract mode", Row::Attract));
-        }
-        rows.extend([
-            ("Default folder", Row::Dir),
-            ("", Row::DirPath),
-            ("Preferences", Row::Save),
-        ]);
-        let label_w = rows.iter().map(|(l, _)| font.measure(l)).max().unwrap_or(0);
-        let w = (label_w + pad * 112).min(width as i32 - pad * 4);
+        let row = row_height(lh, pad);
+        let rows = rows(v.colors.is_some());
+        let label_w = label_width(font, &rows);
+        let (full_w, h) = page_size(font, pad, v);
+        let w = full_w.min(width as i32 - pad * 4);
         let title_h = lh + pad * 2;
-        let h = title_h + pad * 2 + row * rows.len() as i32 + pad * 3 + lh + pad * 6;
         let x0 = (width as i32 - w) / 2;
         let y0 = ((height as i32 - h) / 2).max(0);
 
@@ -225,16 +198,16 @@ impl Prefs {
                 Row::Zoom => {
                     ui.spinner(Field::Zoom, cx, y, &format!("{}x", v.scale), 3);
                 }
-                Row::Text | Row::Background => {
+                Row::Text | Row::Background | Row::Border => {
                     let c = v.colors.as_ref().expect("row only shown with colours");
-                    let (fields, (hue, lum, color, name)) = if *r == Row::Text {
-                        ((Field::FgHue, Field::FgLum), &c.text)
-                    } else {
-                        ((Field::BgHue, Field::BgLum), &c.background)
+                    let (fields, (hue, lum, color, name)) = match r {
+                        Row::Text => ((Field::FgHue, Field::FgLum), &c.text),
+                        Row::Background => ((Field::BgHue, Field::BgLum), &c.background),
+                        _ => ((Field::BrdHue, Field::BrdLum), &c.border),
                     };
                     let end = ui.color_row(cx, y, fields, *hue, *lum, *color, name);
-                    if *r == Row::Background {
-                        ui.button(Field::ResetColors, end + pad * 4, y, "Default Colors");
+                    if *r == Row::Border {
+                        ui.button(Field::ResetColors, end + pad * 4, y, RESET_COLORS);
                     }
                 }
                 Row::Charset => {
@@ -317,6 +290,19 @@ impl Prefs {
             save_w,
             "Save Preferences",
         );
+        let defaults_w = ui.font.measure("Defaults") + pad * 8;
+        ui.button_w(Field::Defaults, lx, by, defaults_w, "Defaults");
+
+        // `row_width` must agree with what was drawn, or controls would
+        // spill past the page's edge.
+        debug_assert!(
+            full_w > w
+                || ui
+                    .hits
+                    .iter()
+                    .all(|(r, ..)| r.right() <= x0 + w - pad * 4 + 1),
+            "Preferences control drawn past the page edge"
+        );
 
         // Focus ring around the focused control.
         let rings = std::mem::take(&mut ui.rings);
@@ -332,6 +318,138 @@ impl Prefs {
                 ));
             }
         }
+    }
+}
+
+#[derive(PartialEq)]
+enum Row {
+    Wrap,
+    Zoom,
+    Text,
+    Background,
+    Border,
+    Charset,
+    Click,
+    ControlKey,
+    Warn,
+    Attract,
+    Dir,
+    DirPath,
+    Save,
+}
+
+/// The labelled rows of the form, top to bottom.
+fn rows(colors: bool) -> Vec<(&'static str, Row)> {
+    let mut rows = vec![("Display width", Row::Wrap), ("Zoom", Row::Zoom)];
+    if colors {
+        rows.push(("Text color", Row::Text));
+        rows.push(("Background color", Row::Background));
+        rows.push(("Border color", Row::Border));
+    }
+    rows.extend([
+        ("Character set", Row::Charset),
+        ("Key click", Row::Click),
+        ("CONTROL key", Row::ControlKey),
+        ("Line length warning", Row::Warn),
+    ]);
+    if colors {
+        rows.push(("Attract mode", Row::Attract));
+    }
+    rows.extend([
+        ("Default folder", Row::Dir),
+        ("", Row::DirPath),
+        ("Preferences", Row::Save),
+    ]);
+    rows
+}
+
+/// Distance from one row to the next. Controls are a line high with half a
+/// pad of breathing room above and below.
+fn row_height(lh: i32, pad: i32) -> i32 {
+    lh + pad + pad / 2
+}
+
+fn label_width(font: &mut UiFont, rows: &[(&str, Row)]) -> i32 {
+    rows.iter().map(|(l, _)| font.measure(l)).max().unwrap_or(0)
+}
+
+const RESET_COLORS: &str = "Default";
+
+/// The page's full size in pixels, before any clipping to the window:
+/// wide enough for its widest row.
+pub fn page_size(font: &mut UiFont, pad: i32, v: &View) -> (i32, i32) {
+    let lh = font.line_height();
+    let rows = rows(v.colors.is_some());
+    let label_w = label_width(font, &rows);
+    let widest = rows
+        .iter()
+        .map(|(_, r)| row_width(font, pad, v, r))
+        .max()
+        .unwrap_or(0);
+    let buttons = font.measure("Defaults")
+        + font.measure("Save Preferences")
+        + font.measure("Close")
+        + pad * 30;
+    let w = (label_w + pad * 6 + widest).max(buttons) + pad * 8;
+    let title_h = lh + pad * 2;
+    // Title, rows, a small gap, the buttons and the bottom margin.
+    let h = title_h + pad * 3 + row_height(lh, pad) * rows.len() as i32 + pad + lh + pad * 5;
+    (w, h)
+}
+
+/// The width of a row's controls, matching what `Ui` draws.
+fn row_width(font: &mut UiFont, p: i32, v: &View, row: &Row) -> i32 {
+    let lh = font.line_height();
+    let spinner =
+        |font: &mut UiFont, chars: usize| lh * 2 + p * 5 + font.measure(&"0".repeat(chars));
+    let checkbox = |font: &mut UiFont, label: &str| lh * 2 / 3 + p * 2 + font.measure(label);
+    let choice = |font: &mut UiFont, options: &[&str]| {
+        let r = lh / 3;
+        options
+            .iter()
+            .map(|o| r * 2 + p + font.measure(o))
+            .sum::<i32>()
+            + p * 5 * (options.len() as i32 - 1).max(0)
+    };
+    let color = |font: &mut UiFont, name: &str| {
+        lh * 2
+            + p * 14
+            + font.measure("Hue")
+            + font.measure("Lum")
+            + spinner(font, 2) * 2
+            + font.measure(name)
+    };
+    match row {
+        Row::Wrap => choice(font, &[&v.native_label, "Window width"]),
+        Row::Zoom => spinner(font, 3),
+        Row::Text | Row::Background | Row::Border => {
+            let Some(c) = &v.colors else { return 0 };
+            let name = match row {
+                Row::Text => &c.text.3,
+                Row::Background => &c.background.3,
+                _ => &c.border.3,
+            };
+            let mut w = color(font, name);
+            if *row == Row::Border {
+                w += p * 8 + font.measure(RESET_COLORS);
+            }
+            w
+        }
+        Row::Charset => choice(font, v.charsets),
+        Row::Click => checkbox(font, "On"),
+        Row::ControlKey => choice(font, &["RIGHT-CTRL", "LEFT-ALT"]),
+        Row::Warn => checkbox(font, "On") + p * 6 + font.measure("after column") + spinner(font, 4),
+        Row::Attract => {
+            checkbox(font, "On")
+                + p * 8
+                + font.measure("after")
+                + spinner(font, 2)
+                + font.measure("minutes without input")
+        }
+        Row::Dir => choice(font, &["Last folder used", "This folder:"]),
+        // The path field stretches to fill whatever room there is.
+        Row::DirPath => font.measure("Browse...") + p * 6 + lh * 8,
+        Row::Save => checkbox(font, "Save preferences on exit"),
     }
 }
 
@@ -354,9 +472,9 @@ impl Ui<'_, '_, '_> {
             f,
             Rect::new(
                 x0 - p,
-                y - p,
+                y - p / 2,
                 (x1 - x0 + p * 2) as u32,
-                (self.lh + p * 2) as u32,
+                (self.lh + p) as u32,
             ),
         ));
     }
@@ -530,9 +648,14 @@ impl Ui<'_, '_, '_> {
 
     fn button_w(&mut self, f: Field, x: i32, y: i32, w: i32, label: &str) {
         let t = &THEME;
-        let h = self.lh + self.pad * 2;
         let in_row = matches!(f, Field::Browse | Field::ResetColors);
-        let y = y - if in_row { self.pad } else { 0 };
+        // Buttons within a row get the row's height; the bottom ones are
+        // a little taller.
+        let (h, y) = if in_row {
+            (self.lh + self.pad, y - self.pad / 2)
+        } else {
+            (self.lh + self.pad * 2, y)
+        };
         let r = Rect::new(x, y, w as u32, h as u32);
         let focused = self.focus == f;
         self.canvas
