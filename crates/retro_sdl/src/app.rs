@@ -21,13 +21,16 @@ struct FileJob {
 #[derive(Debug, Clone, Copy)]
 enum FileJobKind {
     Open,
+    /// Choose the default folder (Preferences).
+    Folder,
     /// Save As, then optionally carry on with something.
     SaveAs {
         then: Option<After>,
     },
 }
-use crate::config::{self, Config, ControlKey};
+use crate::config::{self, Config, ControlKey, DirMode};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
+use crate::prefs::{self, Field, Op, Prefs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
@@ -66,8 +69,8 @@ pub struct App {
     pub running: bool,
     pub overlay: Overlay,
     pub overlay_top: usize,
-    /// A number being typed into the status bar (line length warning).
-    pub prompt: Option<String>,
+    /// The Preferences page, when open.
+    pub prefs: Option<Prefs>,
     pub menus: Vec<Menu>,
     pub context_menu: Menu,
     pub menu: MenuState,
@@ -102,7 +105,7 @@ impl App {
             .machine
             .charsets()
             .get(1)
-            .map(|name| &*Box::leak(format!("{name} Character Set").into_boxed_str()));
+            .map(|name| &*Box::leak(format!("&{name} Character Set").into_boxed_str()));
         let editor = Editor::new(
             Document::new(),
             config.wrap,
@@ -117,7 +120,7 @@ impl App {
             running: true,
             overlay: Overlay::None,
             overlay_top: 0,
-            prompt: None,
+            prefs: None,
             menus: menu::menus(alt_charset),
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
@@ -215,33 +218,57 @@ impl App {
         self.path = Some(path.to_path_buf());
     }
 
-    fn file_dialog(&self, title: &str) -> rfd::FileDialog {
+    fn file_dialog(&self, title: &str, for_save: bool) -> rfd::FileDialog {
         let (desc, exts) = self.spec.file_types;
         let mut d = rfd::FileDialog::new()
             .set_title(title)
             .add_filter(desc, exts)
             .add_filter("All files", &["*"]);
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent())
-            && dir.is_dir()
-        {
+        // Save As for an existing file starts beside it; otherwise use the
+        // default folder from Preferences.
+        let beside = self
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .filter(|d| for_save && d.is_dir())
+            .map(Path::to_path_buf);
+        if let Some(dir) = beside.or_else(|| self.config.start_dir()) {
             d = d.set_directory(dir);
         }
         d
+    }
+
+    /// Remember the folder of a file just opened or saved.
+    fn note_folder(&mut self, path: &Path) {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            self.config.last_dir = dir.to_string_lossy().into_owned();
+        }
     }
 
     /// Show an Open or Save As dialog. It runs on its own thread so the
     /// window keeps responding; [`App::poll_file_job`] picks up the answer.
     /// (macOS needs dialogs on the main thread, and stays responsive there.)
     fn start_file_job(&mut self, kind: FileJobKind) {
-        let save = matches!(kind, FileJobKind::SaveAs { .. });
-        let d = if save {
-            self.file_dialog("Save As").set_file_name(self.file_name())
-        } else {
-            self.file_dialog("Open")
+        let d = match kind {
+            FileJobKind::SaveAs { .. } => self
+                .file_dialog("Save As", true)
+                .set_file_name(self.file_name()),
+            FileJobKind::Open => self.file_dialog("Open", false),
+            FileJobKind::Folder => {
+                let mut d = rfd::FileDialog::new().set_title("Default Folder");
+                if let Some(dir) = self.config.start_dir() {
+                    d = d.set_directory(dir);
+                }
+                d
+            }
         };
         let (tx, rx) = mpsc::channel();
         let run = move || {
-            let _ = tx.send(if save { d.save_file() } else { d.pick_file() });
+            let _ = tx.send(match kind {
+                FileJobKind::SaveAs { .. } => d.save_file(),
+                FileJobKind::Open => d.pick_file(),
+                FileJobKind::Folder => d.pick_folder(),
+            });
         };
         if cfg!(target_os = "macos") {
             run();
@@ -268,9 +295,17 @@ impl App {
         self.file_job = None;
         self.message = None;
         match (kind, result) {
-            (FileJobKind::Open, Some(path)) => self.open_path(&path),
+            (FileJobKind::Open, Some(path)) => {
+                self.note_folder(&path);
+                self.open_path(&path);
+            }
+            (FileJobKind::Folder, Some(dir)) => {
+                self.config.default_dir = dir.to_string_lossy().into_owned();
+                self.config.dir_mode = DirMode::Fixed;
+            }
             (FileJobKind::SaveAs { then }, Some(path)) => {
                 if self.write_to(&path) {
+                    self.note_folder(&path);
                     self.path = Some(path);
                     if let Some(after) = then {
                         self.perform(after);
@@ -350,9 +385,210 @@ impl App {
         self.dialog = Some(Dialog::about(self.spec.title, &self.spec.about));
     }
 
-    fn save_config(&mut self) {
-        if let Err(e) = self.config.save(self.spec.app_id) {
-            self.message = Some(format!("Settings not saved: {e}"));
+    /// Write the settings file now (the "Save Preferences" button).
+    fn save_prefs(&mut self) {
+        self.message = Some(match self.config.save(self.spec.app_id) {
+            Ok(()) => "Preferences saved".into(),
+            Err(e) => format!("Preferences not saved: {e}"),
+        });
+    }
+
+    /// At exit: save everything if "Save preferences on exit" is on.
+    /// Otherwise only record that choice, keeping the saved settings.
+    pub fn save_prefs_on_exit(&self) -> Result<(), String> {
+        if self.config.save_on_exit {
+            self.config.save(self.spec.app_id)
+        } else {
+            let mut saved = Config::load(self.spec.app_id);
+            if !saved.save_on_exit {
+                return Ok(());
+            }
+            saved.save_on_exit = false;
+            saved.save(self.spec.app_id)
+        }
+    }
+
+    // ----- settings ----------------------------------------------------------
+
+    fn set_wrap(&mut self, native: bool) {
+        self.config.wrap = if native {
+            WrapMode::Native
+        } else {
+            WrapMode::Window
+        };
+        self.editor.wrap = self.config.wrap;
+    }
+
+    fn set_scale(&mut self, scale: i32) {
+        self.config.scale = scale.clamp(config::MIN_SCALE as i32, config::MAX_SCALE as i32) as u32;
+    }
+
+    fn set_charset(&mut self, index: usize) {
+        let index = index % self.spec.machine.charsets().len();
+        self.spec.machine.set_charset(index);
+        self.spec.keyboard.set_charset(index);
+        self.config.charset = index;
+        self.charset_changed = true;
+    }
+
+    // ----- preferences page ----------------------------------------------------
+
+    pub fn open_prefs(&mut self, focus: Field) {
+        self.close_menu();
+        self.overlay = Overlay::None;
+        let mut p = Prefs::default();
+        p.focus_on(focus);
+        self.prefs = Some(p);
+    }
+
+    fn close_prefs(&mut self) {
+        if self.config.line_warning == 0 {
+            self.config.line_warning = config::DEFAULT_LINE_WARNING;
+        }
+        self.prefs = None;
+    }
+
+    /// The values shown on the Preferences page.
+    pub fn prefs_view(&self) -> prefs::View<'_> {
+        prefs::View {
+            native: self.config.wrap == WrapMode::Native,
+            native_label: format!("{} columns", self.spec.machine.screen_columns()),
+            scale: self.config.scale,
+            charsets: self.spec.machine.charsets(),
+            charset: self.spec.machine.charset(),
+            key_click: self.config.key_click,
+            left_alt: self.config.control_key == ControlKey::LeftAlt,
+            warn_on: self.config.line_warning_on,
+            warn_col: self.config.line_warning,
+            dir_fixed: self.config.dir_mode == DirMode::Fixed,
+            dir_path: &self.config.default_dir,
+            save_on_exit: self.config.save_on_exit,
+        }
+    }
+
+    /// The selected option of a choice field and how many options it has.
+    fn choice_state(&self, f: Field) -> Option<(usize, usize)> {
+        Some(match f {
+            Field::Wrap => (usize::from(self.config.wrap == WrapMode::Window), 2),
+            Field::Charset => (
+                self.spec.machine.charset(),
+                self.spec.machine.charsets().len(),
+            ),
+            Field::ControlKey => (
+                usize::from(self.config.control_key == ControlKey::LeftAlt),
+                2,
+            ),
+            Field::DirMode => (usize::from(self.config.dir_mode == DirMode::Fixed), 2),
+            _ => return None,
+        })
+    }
+
+    /// Change a setting from the Preferences page.
+    fn prefs_apply(&mut self, f: Field, op: Op) {
+        match (f, op) {
+            (Field::Wrap, Op::Choose(i)) => self.set_wrap(i == 0),
+            (Field::Zoom, Op::Dec) => self.set_scale(self.config.scale as i32 - 1),
+            (Field::Zoom, Op::Inc) => self.set_scale(self.config.scale as i32 + 1),
+            (Field::Charset, Op::Choose(i)) => self.set_charset(i),
+            (Field::Click, Op::Toggle) => self.config.key_click = !self.config.key_click,
+            (Field::ControlKey, Op::Choose(i)) => {
+                self.config.control_key = if i == 0 {
+                    ControlKey::RightCtrl
+                } else {
+                    ControlKey::LeftAlt
+                }
+            }
+            (Field::WarnOn, Op::Toggle) => {
+                self.config.line_warning_on = !self.config.line_warning_on
+            }
+            (Field::WarnCol, Op::Dec | Op::Inc) => {
+                let d: isize = if op == Op::Inc { 1 } else { -1 };
+                self.config.line_warning = (self.config.line_warning as isize + d)
+                    .clamp(1, config::MAX_LINE_WARNING as isize)
+                    as usize;
+            }
+            (Field::DirMode, Op::Choose(i)) => {
+                self.config.dir_mode = if i == 0 {
+                    DirMode::Last
+                } else {
+                    DirMode::Fixed
+                }
+            }
+            (Field::Browse, Op::Press) => self.start_file_job(FileJobKind::Folder),
+            (Field::SaveOnExit, Op::Toggle) => self.config.save_on_exit = !self.config.save_on_exit,
+            (Field::SaveNow, Op::Press) => self.save_prefs(),
+            (Field::Close, Op::Press) => self.close_prefs(),
+            _ => {}
+        }
+    }
+
+    /// A key pressed while Preferences is open. Returns true if the key was
+    /// used up (so the text it types should be ignored).
+    fn prefs_key(&mut self, k: Keycode, shift: bool) -> bool {
+        let Some(p) = &mut self.prefs else {
+            return false;
+        };
+        let f = p.focused();
+        let text_field = matches!(f, Field::DirPath | Field::WarnCol);
+        match k {
+            Keycode::TAB => p.move_focus(if shift { -1 } else { 1 }),
+            Keycode::UP => p.move_focus(-1),
+            Keycode::DOWN => p.move_focus(1),
+            Keycode::ESCAPE => self.close_prefs(),
+            Keycode::RETURN | Keycode::KP_ENTER => match f {
+                Field::Browse | Field::SaveNow | Field::Close => self.prefs_apply(f, Op::Press),
+                _ => self.close_prefs(),
+            },
+            Keycode::LEFT | Keycode::RIGHT => {
+                let fwd = k == Keycode::RIGHT;
+                if let Some((cur, n)) = self.choice_state(f) {
+                    let next = if fwd {
+                        (cur + 1) % n
+                    } else {
+                        (cur + n - 1) % n
+                    };
+                    self.prefs_apply(f, Op::Choose(next));
+                } else if matches!(f, Field::Zoom | Field::WarnCol) {
+                    self.prefs_apply(f, if fwd { Op::Inc } else { Op::Dec });
+                }
+            }
+            Keycode::SPACE if !text_field => {
+                if let Some((cur, n)) = self.choice_state(f) {
+                    self.prefs_apply(f, Op::Choose((cur + 1) % n));
+                } else {
+                    self.prefs_apply(f, Op::Toggle);
+                    self.prefs_apply(f, Op::Press);
+                }
+            }
+            Keycode::BACKSPACE => match f {
+                Field::DirPath => {
+                    self.config.default_dir.pop();
+                }
+                Field::WarnCol => self.config.line_warning /= 10,
+                _ => {}
+            },
+            _ => return !text_field,
+        }
+        true
+    }
+
+    /// Text typed while Preferences is open (folder path, column number).
+    fn prefs_text(&mut self, text: &str) {
+        let Some(p) = &self.prefs else { return };
+        match p.focused() {
+            Field::DirPath => {
+                self.config.default_dir.push_str(text);
+                self.config.dir_mode = DirMode::Fixed;
+            }
+            Field::WarnCol => {
+                for d in text.chars().filter_map(|c| c.to_digit(10)) {
+                    let n = self.config.line_warning * 10 + d as usize;
+                    if n <= config::MAX_LINE_WARNING {
+                        self.config.line_warning = n;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -383,7 +619,7 @@ impl App {
             return;
         }
         let layout = &ctx.frame.layout;
-        if self.dialog.is_some() || self.file_job.is_some() {
+        if self.dialog.is_some() || self.file_job.is_some() || self.prefs.is_some() {
             return;
         }
         match c {
@@ -422,31 +658,15 @@ impl App {
                 Err(e) => self.message = Some(format!("Clipboard error: {e}")),
             },
             SelectAll => self.editor.select_all(),
-            ToggleWrap => {
-                self.config.wrap = match self.config.wrap {
-                    WrapMode::Native => WrapMode::Window,
-                    WrapMode::Window => WrapMode::Native,
-                };
-                self.editor.wrap = self.config.wrap;
-                self.save_config();
-            }
-            ZoomIn | ZoomOut => {
-                let delta = if c == ZoomIn { 1 } else { -1 };
-                let s = (self.config.scale as i32 + delta)
-                    .clamp(config::MIN_SCALE as i32, config::MAX_SCALE as i32)
-                    as u32;
-                if s != self.config.scale {
-                    self.config.scale = s;
-                    self.save_config();
-                }
-            }
+            ToggleWrap => self.set_wrap(self.config.wrap != WrapMode::Native),
+            ZoomIn => self.set_scale(self.config.scale as i32 + 1),
+            ZoomOut => self.set_scale(self.config.scale as i32 - 1),
             ToggleClick => {
                 self.config.key_click = !self.config.key_click;
                 self.message = Some(format!(
                     "Key click {}",
                     if self.config.key_click { "on" } else { "off" }
                 ));
-                self.save_config();
             }
             ToggleControlKey => {
                 self.config.control_key = match self.config.control_key {
@@ -457,27 +677,13 @@ impl App {
                     "CONTROL key is now {}",
                     self.config.control_key.label()
                 ));
-                self.save_config();
             }
             ToggleCharset => {
-                let n = self.spec.machine.charsets().len();
-                let next = (self.spec.machine.charset() + 1) % n;
-                self.spec.machine.set_charset(next);
-                self.spec.keyboard.set_charset(next);
-                self.config.charset = next;
-                self.charset_changed = true;
-                self.message = Some(format!(
-                    "{} character set",
-                    self.spec.machine.charsets()[next]
-                ));
-                self.save_config();
+                self.set_charset(self.spec.machine.charset() + 1);
+                let m = &self.spec.machine;
+                self.message = Some(format!("{} character set", m.charsets()[m.charset()]));
             }
-            LineWarning => {
-                self.prompt = Some(match self.config.line_warning {
-                    0 => String::new(),
-                    n => n.to_string(),
-                });
-            }
+            Preferences => self.open_prefs(Field::Wrap),
             KeyHelp => {
                 self.overlay = Overlay::Help;
                 self.overlay_top = 0;
@@ -544,7 +750,22 @@ impl App {
                     self.command(c, ctx);
                 }
             }
-            _ => {}
+            other => {
+                // The item's underlined hot key chooses it.
+                let key = char::from_u32(other.into_i32() as u32).map(|c| c.to_ascii_lowercase());
+                let cmd = self.open_items().and_then(|m| {
+                    m.items
+                        .iter()
+                        .find(|it| it.command.is_some() && menu::hot_key(it.label) == key)
+                        .and_then(|it| it.command)
+                });
+                if let Some(c) = cmd
+                    && self.item_state(c, ctx.clipboard).enabled
+                {
+                    self.close_menu();
+                    self.command(c, ctx);
+                }
+            }
         }
     }
 
@@ -567,12 +788,8 @@ impl App {
         {
             return false;
         }
-        if let Some(input) = &mut self.prompt {
-            for c in text.chars().filter(char::is_ascii_digit) {
-                if input.len() < 4 {
-                    input.push(c);
-                }
-            }
+        if self.prefs.is_some() {
+            self.prefs_text(text);
             return false;
         }
         let ctrl_held = held.intersects(Mod::LCTRLMOD | self.atari_ctrl_mod());
@@ -651,25 +868,8 @@ impl App {
             return false;
         }
 
-        if let Some(input) = &mut self.prompt {
-            match k {
-                Keycode::RETURN | Keycode::KP_ENTER => {
-                    let n = input.parse().unwrap_or(0);
-                    self.prompt = None;
-                    self.config.line_warning = n.min(config::MAX_LINE_WARNING);
-                    self.message = Some(if n == 0 {
-                        "Line length warning off".into()
-                    } else {
-                        format!("Line length warning at {n} characters")
-                    });
-                    self.save_config();
-                }
-                Keycode::ESCAPE => self.prompt = None,
-                Keycode::BACKSPACE => {
-                    input.pop();
-                }
-                _ => {}
-            }
+        if self.prefs.is_some() {
+            self.swallow_text = self.prefs_key(k, shift);
             return false;
         }
 
@@ -688,7 +888,11 @@ impl App {
         // Alt+letter opens a menu (unless Alt is the Atari CONTROL key).
         if alt {
             let c = char::from_u32(k.into_i32() as u32).unwrap_or('\0');
-            if let Some(i) = self.menus.iter().position(|m| m.mnemonic == c) {
+            if let Some(i) = self
+                .menus
+                .iter()
+                .position(|m| menu::hot_key(m.title) == Some(c))
+            {
                 self.open_menu(i);
                 self.swallow_text = true;
             }
@@ -711,6 +915,7 @@ impl App {
                 Keycode::C => Some(Copy),
                 Keycode::V => Some(Paste),
                 Keycode::A => Some(SelectAll),
+                Keycode::COMMA => Some(Preferences),
                 Keycode::EQUALS | Keycode::PLUS | Keycode::KP_PLUS => Some(ZoomIn),
                 Keycode::MINUS | Keycode::KP_MINUS => Some(ZoomOut),
                 Keycode::HOME | Keycode::END => {
@@ -741,7 +946,10 @@ impl App {
             Keycode::F6 => Some(Command::ToggleCharset),
             Keycode::F7 => Some(Command::ToggleClick),
             Keycode::F8 => Some(Command::ToggleControlKey),
-            Keycode::F9 => Some(Command::LineWarning),
+            Keycode::F9 => {
+                self.open_prefs(Field::WarnOn);
+                return false;
+            }
             _ => None,
         };
         if let Some(c) = fkey {
@@ -830,7 +1038,14 @@ impl App {
             }
             return;
         }
-        if self.overlay != Overlay::None || self.prompt.is_some() {
+        if let Some(p) = &mut self.prefs {
+            if let Some((f, op)) = p.hit(x, y) {
+                p.focus_on(f);
+                self.prefs_apply(f, op);
+            }
+            return;
+        }
+        if self.overlay != Overlay::None {
             return;
         }
         if y >= f.text_top && y < f.status_top {
@@ -851,7 +1066,7 @@ impl App {
             return;
         }
         if self.overlay != Overlay::None
-            || self.prompt.is_some()
+            || self.prefs.is_some()
             || y < f.text_top
             || y >= f.status_top
         {

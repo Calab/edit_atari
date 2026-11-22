@@ -135,6 +135,11 @@ impl<'t> UiFont<'t> {
         }
     }
 
+    /// Distance from the top of a line to the text baseline, in pixels.
+    pub fn baseline(&self) -> i32 {
+        self.ascent.round() as i32
+    }
+
     /// Height of a line of text in pixels.
     pub fn line_height(&self) -> i32 {
         self.line_height.ceil() as i32

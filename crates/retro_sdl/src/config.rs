@@ -24,6 +24,15 @@ impl ControlKey {
     }
 }
 
+/// Where Open and Save As dialogs start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirMode {
+    /// The folder last used in a file dialog.
+    Last,
+    /// Always `Config::default_dir`.
+    Fixed,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub control_key: ControlKey,
@@ -32,11 +41,36 @@ pub struct Config {
     pub scale: u32,
     pub key_click: bool,
     pub click_volume: f32,
-    /// Characters past this column are drawn in the warning colour;
-    /// 0 turns the warning off.
+    /// Draw characters past `line_warning` in the warning colour.
+    pub line_warning_on: bool,
+    /// The last column allowed before the warning (1-based count).
     pub line_warning: usize,
     /// Character set index (0 = the machine's standard set).
     pub charset: usize,
+    pub dir_mode: DirMode,
+    /// The fixed starting folder (`DirMode::Fixed`).
+    pub default_dir: String,
+    /// The folder last used in a file dialog (`DirMode::Last`).
+    pub last_dir: String,
+    /// Write the settings file when the program exits.
+    pub save_on_exit: bool,
+}
+
+impl Config {
+    /// The warning column, or `None` when the warning is off.
+    pub fn warning_column(&self) -> Option<usize> {
+        (self.line_warning_on && self.line_warning > 0).then_some(self.line_warning)
+    }
+
+    /// The folder file dialogs should start in, if it exists.
+    pub fn start_dir(&self) -> Option<PathBuf> {
+        let d = match self.dir_mode {
+            DirMode::Last => &self.last_dir,
+            DirMode::Fixed => &self.default_dir,
+        };
+        let p = PathBuf::from(d);
+        (!d.is_empty() && p.is_dir()).then_some(p)
+    }
 }
 
 impl Default for Config {
@@ -47,8 +81,13 @@ impl Default for Config {
             scale: 3,
             key_click: true,
             click_volume: 0.25,
+            line_warning_on: true,
             line_warning: DEFAULT_LINE_WARNING,
             charset: 0,
+            dir_mode: DirMode::Last,
+            default_dir: String::new(),
+            last_dir: String::new(),
+            save_on_exit: true,
         }
     }
 }
@@ -115,9 +154,23 @@ impl Config {
                 }
                 "line_warning" => {
                     if let Ok(n) = v.parse::<usize>() {
-                        c.line_warning = n.min(MAX_LINE_WARNING);
+                        // Older files used 0 for "off".
+                        if n == 0 {
+                            c.line_warning_on = false;
+                        } else {
+                            c.line_warning = n.min(MAX_LINE_WARNING);
+                        }
                     }
                 }
+                "line_warning_on" => c.line_warning_on = v != "off",
+                "dir_mode" => match v {
+                    "last" => c.dir_mode = DirMode::Last,
+                    "fixed" => c.dir_mode = DirMode::Fixed,
+                    _ => {}
+                },
+                "default_dir" => c.default_dir = v.to_string(),
+                "last_dir" => c.last_dir = v.to_string(),
+                "save_on_exit" => c.save_on_exit = v != "off",
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -139,10 +192,16 @@ impl Config {
              scale = {}\n\
              key_click = {}\n\
              click_volume = {}\n\
-             # line_warning: highlight characters past this column (0 = off)\n\
+             # Highlight characters past line_warning\n\
+             line_warning_on = {}\n\
              line_warning = {}\n\
-             # charset: 0 = standard, 1 = international (Atari)\n\
-             charset = {}\n",
+             # charset: 0 = standard (graphics), 1 = international (Atari)\n\
+             charset = {}\n\
+             # dir_mode: last (folder last used) | fixed (default_dir)\n\
+             dir_mode = {}\n\
+             default_dir = {}\n\
+             last_dir = {}\n\
+             save_on_exit = {}\n",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -152,10 +211,18 @@ impl Config {
                 WrapMode::Window => "window",
             },
             self.scale,
-            if self.key_click { "on" } else { "off" },
+            on_off(self.key_click),
             self.click_volume,
+            on_off(self.line_warning_on),
             self.line_warning,
             self.charset,
+            match self.dir_mode {
+                DirMode::Last => "last",
+                DirMode::Fixed => "fixed",
+            },
+            self.default_dir,
+            self.last_dir,
+            on_off(self.save_on_exit),
         )
     }
 
@@ -166,6 +233,10 @@ impl Config {
         }
         std::fs::write(&path, self.to_text()).map_err(|e| e.to_string())
     }
+}
+
+fn on_off(b: bool) -> &'static str {
+    if b { "on" } else { "off" }
 }
 
 #[cfg(test)]
@@ -180,8 +251,13 @@ mod tests {
             scale: 2,
             key_click: false,
             click_volume: 0.5,
-            line_warning: 0,
+            line_warning_on: false,
+            line_warning: 80,
             charset: 1,
+            dir_mode: DirMode::Fixed,
+            default_dir: "/home/me/atari files".into(),
+            last_dir: "C:\\Atari".into(),
+            save_on_exit: false,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }
@@ -191,5 +267,13 @@ mod tests {
         let c = Config::parse("control_key = shift\nscale = 99\nnonsense");
         assert_eq!(c.control_key, ControlKey::RightCtrl);
         assert_eq!(c.scale, MAX_SCALE);
+    }
+
+    #[test]
+    fn old_zero_warning_means_off() {
+        let c = Config::parse("line_warning = 0");
+        assert!(!c.line_warning_on);
+        assert_eq!(c.line_warning, DEFAULT_LINE_WARNING);
+        assert_eq!(c.warning_column(), None);
     }
 }

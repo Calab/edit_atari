@@ -26,7 +26,7 @@ pub enum Command {
     ZoomOut,
     ToggleClick,
     ToggleControlKey,
-    LineWarning,
+    Preferences,
     ToggleCharset,
     KeyHelp,
     Licensing,
@@ -41,9 +41,8 @@ pub struct Item {
 }
 
 pub struct Menu {
+    /// Title with `&` before the letter that opens it with Alt.
     pub title: &'static str,
-    /// The letter that opens the menu with Alt.
-    pub mnemonic: char,
     pub items: Vec<Item>,
 }
 
@@ -62,58 +61,47 @@ const SEP: Item = Item {
 };
 
 /// The menus. `alt_charset` names the machine's second character set, if
-/// it has one, for a toggle in the Options menu.
+/// it has one, for a toggle in the Options menu. In labels, `&` marks the
+/// hot key (underlined; pressing it chooses the item while the menu is open).
 pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
     use Command::*;
     let mut m = vec![
         Menu {
-            title: "File",
-            mnemonic: 'f',
+            title: "&File",
             items: vec![
-                item("New", "Ctrl+N", New),
-                item("Open...", "Ctrl+O", Open),
+                item("&New", "Ctrl+N", New),
+                item("&Open...", "Ctrl+O", Open),
                 SEP,
-                item("Save", "Ctrl+S", Save),
-                item("Save As...", "Ctrl+Shift+S", SaveAs),
+                item("&Save", "Ctrl+S", Save),
+                item("Save &As...", "Ctrl+Shift+S", SaveAs),
                 SEP,
-                item("Quit", "Ctrl+Q", Quit),
+                item("&Quit", "Ctrl+Q", Quit),
             ],
         },
         Menu {
-            title: "Edit",
-            mnemonic: 'e',
+            title: "&Edit",
+            items: edit_items(),
+        },
+        Menu {
+            title: "&Options",
             items: vec![
-                item("Undo", "Ctrl+Z", Undo),
-                item("Redo", "Ctrl+Y", Redo),
+                item("&40 Columns", "F4", ToggleWrap),
+                item("Zoom &In", "Ctrl++", ZoomIn),
+                item("Zoom &Out", "Ctrl+-", ZoomOut),
                 SEP,
-                item("Cut", "Ctrl+X", Cut),
-                item("Copy", "Ctrl+C", Copy),
-                item("Paste", "Ctrl+V", Paste),
+                item("&Key Click", "F7", ToggleClick),
+                item("LEFT-&ALT as CONTROL Key", "F8", ToggleControlKey),
                 SEP,
-                item("Select All", "Ctrl+A", SelectAll),
+                item("&Preferences...", "Ctrl+,", Preferences),
             ],
         },
         Menu {
-            title: "Options",
-            mnemonic: 'o',
+            title: "&Help",
             items: vec![
-                item("40 Columns", "F4", ToggleWrap),
-                item("Zoom In", "Ctrl++", ZoomIn),
-                item("Zoom Out", "Ctrl+-", ZoomOut),
+                item("&Keyboard Help", "F1", KeyHelp),
                 SEP,
-                item("Key Click", "F7", ToggleClick),
-                item("LEFT-ALT as CONTROL Key", "F8", ToggleControlKey),
-                item("Line Length Warning...", "F9", LineWarning),
-            ],
-        },
-        Menu {
-            title: "Help",
-            mnemonic: 'h',
-            items: vec![
-                item("Keyboard Help", "F1", KeyHelp),
-                SEP,
-                item("Licensing", "", Licensing),
-                item("About", "", About),
+                item("&Licensing", "", Licensing),
+                item("&About", "", About),
             ],
         },
     ];
@@ -121,6 +109,55 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
         m[2].items.insert(4, item(label, "F6", ToggleCharset));
     }
     m
+}
+
+fn edit_items() -> Vec<Item> {
+    use Command::*;
+    vec![
+        item("&Undo", "Ctrl+Z", Undo),
+        item("&Redo", "Ctrl+Y", Redo),
+        SEP,
+        item("Cu&t", "Ctrl+X", Cut),
+        item("&Copy", "Ctrl+C", Copy),
+        item("&Paste", "Ctrl+V", Paste),
+        SEP,
+        item("Select &All", "Ctrl+A", SelectAll),
+    ]
+}
+
+/// A label without its `&` hot-key marker.
+pub fn plain(label: &str) -> String {
+    label.replacen('&', "", 1)
+}
+
+/// The hot key marked with `&` in a label, lower case.
+pub fn hot_key(label: &str) -> Option<char> {
+    let i = label.find('&')?;
+    label[i + 1..]
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_lowercase())
+}
+
+/// Draw a label at (x, y), underlining its hot key.
+fn draw_label(
+    canvas: &mut Canvas<Window>,
+    font: &mut UiFont,
+    x: i32,
+    y: i32,
+    label: &str,
+    color: Color,
+) {
+    font.draw(canvas, x, y, &plain(label), color);
+    if let Some(i) = label.find('&')
+        && let Some(c) = label[i + 1..].chars().next()
+    {
+        let before = font.measure(&label[..i]);
+        let w = font.measure(&c.to_string());
+        let uy = y + font.baseline() + 2;
+        canvas.set_draw_color(color);
+        let _ = canvas.draw_line((x + before, uy), (x + before + w - 1, uy));
+    }
 }
 
 /// Interface colours (a light theme like a standard desktop app).
@@ -160,20 +197,9 @@ impl MenuState {
 
 /// The right-click menu.
 pub fn context_menu() -> Menu {
-    use Command::*;
     Menu {
         title: "",
-        mnemonic: '\0',
-        items: vec![
-            item("Undo", "Ctrl+Z", Undo),
-            item("Redo", "Ctrl+Y", Redo),
-            SEP,
-            item("Cut", "Ctrl+X", Cut),
-            item("Copy", "Ctrl+C", Copy),
-            item("Paste", "Ctrl+V", Paste),
-            SEP,
-            item("Select All", "Ctrl+A", SelectAll),
-        ],
+        items: edit_items(),
     }
 }
 
@@ -233,7 +259,7 @@ pub fn draw(
 
     let mut x = pad / 2;
     for (i, m) in menus.iter().enumerate() {
-        let w = font.measure(m.title) + pad * 2;
+        let w = font.measure(&plain(m.title)) + pad * 2;
         let r = Rect::new(x, 0, w as u32, (bar_h - 1) as u32);
         let open = state.open == Some(i);
         if open {
@@ -241,7 +267,7 @@ pub fn draw(
             let _ = canvas.fill_rect(r);
         }
         let color = if open { t.highlight_text } else { t.text };
-        font.draw(canvas, x + pad, pad / 2, m.title, color);
+        draw_label(canvas, font, x + pad, pad / 2, m.title, color);
         geom.titles.push(r);
         x += w;
     }
@@ -286,7 +312,7 @@ fn draw_dropdown(
     let label_w = menu
         .items
         .iter()
-        .map(|it| font.measure(it.label))
+        .map(|it| font.measure(&plain(it.label)))
         .max()
         .unwrap_or(0);
     let short_w = menu
@@ -346,7 +372,7 @@ fn draw_dropdown(
                 let _ = canvas.draw_line((cx + u, cy + u + d), (cx + u * 3, cy - u + d));
             }
         }
-        font.draw(canvas, left + pad / 2 + check_w, ty, it.label, color);
+        draw_label(canvas, font, left + pad / 2 + check_w, ty, it.label, color);
         let sw = font.measure(it.shortcut);
         font.draw(canvas, left + w - pad - sw, ty, it.shortcut, color);
         rects.push(r);

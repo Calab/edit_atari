@@ -32,7 +32,7 @@ character set is built in.
     moves to the start of the next line.
 - Line length warning: characters past column 114 (the Atari screen
   editor's 3 x 38 logical line) are shown in orange, and the status bar
-  shows the line's length. Press F9 to change the limit (0 turns it off).
+  shows the line's length. Change the limit or turn it off in Preferences.
 - 40-column Atari layout with the 2-column margin, or wrapping at the window
   width (F4).
 - The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it
@@ -40,7 +40,12 @@ character set is built in.
 - Opens PC text files (LF or CR/LF) and saves them as ATASCII.
 
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
-  S, Z, Y, X, C, V, A) and the system's own Open and Save dialogs.
+  S, Z, Y, X, C, V, A), underlined hot keys (Alt+F then Q quits), a
+  right-click menu, and the system's own Open and Save dialogs.
+- A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
+  zoom, character set, key click, CONTROL key, line length warning, default
+  folder (last used or a fixed one), and whether to save preferences on
+  exit. Changes apply at once; "Save Preferences" writes them immediately.
 - Select text with Shift+arrows or the mouse; selected text is shown in its
   own colour so it isn't confused with inverse characters. Copy and paste work with
   other programs: ordinary characters paste as plain text, and Atari

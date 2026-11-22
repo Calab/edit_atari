@@ -73,6 +73,16 @@ impl App {
         if let Some(d) = &mut self.dialog {
             d.draw(canvas, font, (f.width, f.height), self.pad);
         }
+        if let Some(mut p) = self.prefs.take() {
+            p.draw(
+                canvas,
+                font,
+                &self.prefs_view(),
+                (f.width, f.height),
+                self.pad,
+            );
+            self.prefs = Some(p);
+        }
     }
 
     fn draw_text(&self, grid: &mut Grid, f: &Frame) {
@@ -82,10 +92,7 @@ impl App {
         let layout = &f.layout;
         let doc = &self.editor.doc;
         let w = layout.text_cols;
-        let warn_col = match self.config.line_warning {
-            0 => usize::MAX,
-            n => n,
-        };
+        let warn_col = self.config.warning_column().unwrap_or(usize::MAX);
         let sel = self.editor.selection();
         let mut row = 0usize; // absolute screen row of the current line's first row
         for (i, line) in doc.lines().iter().enumerate() {
@@ -163,18 +170,12 @@ impl App {
         let _ = canvas.draw_line((0, y), (f.width as i32, y));
         let ty = y + pad / 2;
 
-        if let Some(input) = &self.prompt {
-            let s = format!("Line length warning (0 = off): {input}_     Enter = OK, Esc = cancel");
-            font.draw(canvas, pad, ty, &s, t.text);
-            return;
-        }
-
         // Right-hand indicators, separated by thin lines.
         let doc = &self.editor.doc;
         let cur = doc.cursor();
         let mut parts: Vec<(String, Color)> = Vec::new();
         let len = doc.line(cur.line).len();
-        if self.config.line_warning > 0 && len > self.config.line_warning {
+        if self.config.warning_column().is_some_and(|w| len > w) {
             parts.push((
                 format!("Line too long: {len}"),
                 Color::RGB(0xC0, 0x40, 0x00),
@@ -316,7 +317,8 @@ impl App {
              F6  Standard / international character set\n\
              F7  Key click on/off\n\
              F8  CONTROL key ({ctrl})\n\
-             F9  Line length warning\n\
+             F9  Line length warning (Preferences)\n\
+             Ctrl+,  Preferences\n\
              \n\
              Insert  Insert / overwrite mode\n\
              Shift+Insert  Insert line\n\

@@ -7,6 +7,7 @@ mod app;
 pub mod config;
 mod dialog;
 pub mod menu;
+mod prefs;
 pub mod render;
 pub mod ui_font;
 mod view;
@@ -128,6 +129,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // RETRO_EDITOR_HELP = help | licensing | about
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
+        Ok("prefs") => {
+            app.open_prefs(prefs::Field::Wrap);
+            app::Overlay::None
+        }
         Ok("about") => {
             app.show_about();
             app::Overlay::None
@@ -254,7 +259,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         }
     }
 
-    if let Err(e) = app.config.save(app.spec.app_id) {
+    if let Err(e) = app.save_prefs_on_exit() {
         eprintln!("could not save settings: {e}");
     }
     Ok(())

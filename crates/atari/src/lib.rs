@@ -47,7 +47,7 @@ impl Machine for Atari {
     }
 
     fn charsets(&self) -> &'static [&'static str] {
-        &["Standard", "International"]
+        &["Graphics", "International"]
     }
 
     fn charset(&self) -> usize {
