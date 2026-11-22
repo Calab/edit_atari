@@ -1,0 +1,9 @@
+[package]
+name = "fontgen"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+png = "0.18.1"
+ttf-parser = "0.25.1"

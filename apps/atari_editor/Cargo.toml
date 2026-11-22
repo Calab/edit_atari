@@ -1,0 +1,11 @@
+[package]
+name = "atari_editor"
+description = "A text editor for Atari 8-bit ATASCII files"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+atari = { path = "../../crates/atari" }
+retro_core = { path = "../../crates/retro_core" }
+retro_sdl = { path = "../../crates/retro_sdl" }

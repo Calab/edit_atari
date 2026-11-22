@@ -1,0 +1,10 @@
+[package]
+name = "retro_sdl"
+description = "SDL2 front end shared by the retro text editors"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+retro_core = { path = "../retro_core" }
+sdl2 = { version = "0.39.0", features = ["bundled", "static-link"] }

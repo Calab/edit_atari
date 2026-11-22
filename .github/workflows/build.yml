@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04 # older glibc, so the binary runs on more distros
+            name: linux-x86_64
+            exe: atari_editor
+          - os: windows-latest
+            name: windows-x86_64
+            exe: atari_editor.exe
+          - os: macos-latest
+            name: macos-arm64
+            exe: atari_editor
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install SDL build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libx11-dev libxext-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxss-dev libxkbcommon-dev \
+            libwayland-dev libegl-dev libasound2-dev libpulse-dev libdbus-1-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --release -p atari_editor
+
+      - name: Package
+        shell: bash
+        run: |
+          dir=atari_editor-${{ matrix.name }}
+          mkdir "$dir"
+          cp "target/release/${{ matrix.exe }}" "$dir/"
+          cp LICENSE README.md "$dir/"
+          cp assets/fonts/atari/OFL.txt "$dir/FONT-LICENSE-OFL.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atari_editor-${{ matrix.name }}
+          path: atari_editor-${{ matrix.name }}
