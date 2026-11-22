@@ -207,6 +207,21 @@ fn microsoft_basic_programs_list() {
         );
     }
     check_listings("Microsoft BASIC", &atari::msbasic::MicrosoftBasic);
+    // Written back from their listings, every line is stored as before;
+    // MSTEST (saved by Microsoft BASIC II) comes out identical byte for
+    // byte, next-line addresses included.
+    for p in programs("Microsoft BASIC") {
+        let bytes = std::fs::read(&p).unwrap();
+        let Ok(d) = atari::msbasic::MicrosoftBasic.decode(&bytes) else {
+            continue;
+        };
+        let ours = atari::msbasic::encode(&d.lines).unwrap();
+        let again = atari::msbasic::MicrosoftBasic.decode(&ours).unwrap();
+        assert_eq!(again.lines, d.lines, "{}", p.display());
+        if p.file_name().is_some_and(|n| n == "MSTEST.BAS") {
+            assert!(ours == bytes, "MSTEST.BAS differs");
+        }
+    }
     // MSLOCK is MSTEST saved with SAVE ... LOCK: it lists the same.
     let read = |name: &str| {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -165,6 +165,7 @@ const FIRST_KEYWORD: u8 = 0x80;
 const FUNCTION_PREFIX: u8 = 0xFF;
 const FIRST_FUNCTION: u8 = 0xA3;
 
+const DATA: u16 = 0x84;
 const REM: u8 = 0x98;
 const APOSTROPHE: u8 = 0x9A;
 const BANG: u8 = 0x9B;
@@ -270,6 +271,164 @@ impl FileFormat for MicrosoftBasic {
             converted_from: None,
         })
     }
+
+    fn can_encode(&self) -> bool {
+        true
+    }
+
+    fn encode(&self, doc: &retro_core::Document) -> Result<retro_core::Encoded, String> {
+        Ok(retro_core::Encoded::clean(encode(doc.lines())?))
+    }
+}
+
+/// Where Microsoft BASIC II keeps the first program line in memory; the
+/// next-line addresses in a file count from here.
+const PROGRAM_START: u16 = 0x0701;
+
+/// LIST text back into a SAVE file. Blank lines are skipped; lines are
+/// sorted by number, a later line replacing an earlier one with the same
+/// number, as when typing them in.
+pub fn encode(lines: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+    let mut numbered: Vec<(u16, Vec<u8>)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let start = line.iter().take_while(|&&c| c == b' ').count();
+        let text = &line[start..];
+        if text.is_empty() {
+            continue;
+        }
+        let digits = text.iter().take_while(|c| c.is_ascii_digit()).count();
+        let number = std::str::from_utf8(&text[..digits])
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .filter(|&n| n <= 63999)
+            .ok_or_else(|| format!("line {} of the text has no line number (0-63999)", i + 1))?;
+        let rest = &text[digits..];
+        let rest = &rest[rest.iter().take_while(|&&c| c == b' ').count()..];
+        numbered.push((number, crunch(rest)));
+    }
+    numbered.sort_by_key(|(n, _)| *n); // stable: the later of two equal lines comes last
+    numbered.reverse();
+    numbered.dedup_by_key(|(n, _)| *n); // keeps the first, which is now the later one
+    numbered.reverse();
+
+    let mut body = Vec::new();
+    let mut addr = PROGRAM_START as usize;
+    for (number, text) in &numbered {
+        addr += 4 + text.len() + 1;
+        let next = u16::try_from(addr).map_err(|_| "program too large".to_string())?;
+        body.extend_from_slice(&next.to_le_bytes());
+        body.extend_from_slice(&number.to_le_bytes());
+        body.extend_from_slice(text);
+        body.push(0);
+    }
+    body.extend_from_slice(&[0, 0]);
+    let size = u16::try_from(body.len()).map_err(|_| "program too large".to_string())?;
+    let mut f = vec![PLAIN];
+    f.extend_from_slice(&size.to_le_bytes());
+    f.extend(body);
+    Ok(f)
+}
+
+/// One line's text with keywords crunched to tokens, the reverse of
+/// [`list_line`]: a keyword counts only where it isn't part of a longer
+/// name (PUTIOCB stays as typed); `?` is PRINT; a string's closing quote
+/// is stored as `|`; `'`, `!` and ELSE get their hidden `:`; the rest of
+/// a REM, `'` or `!` line, and a DATA statement, stay as typed.
+fn crunch(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let name_char = |c: u8| c.is_ascii_alphanumeric();
+    while i < text.len() {
+        let c = text[i];
+        if c == b'"' {
+            out.push(b'"');
+            i += 1;
+            while i < text.len() && text[i] != b'"' {
+                out.push(text[i]);
+                i += 1;
+            }
+            if i < text.len() {
+                out.push(CLOSE_QUOTE);
+                i += 1;
+            }
+            continue;
+        }
+        let after_name = i > 0 && (name_char(text[i - 1]) || text[i - 1] == b'.');
+        let rest = &text[i..];
+        // `!` straight after a name is a type suffix (X!), not a comment.
+        let token = if c == b'?' {
+            Some((0xAB_u16, 1))
+        } else if c == b'\'' || (c == b'!' && !after_name) {
+            Some((u16::from(if c == b'!' { BANG } else { APOSTROPHE }), 1))
+        } else if after_name && c.is_ascii_alphabetic() {
+            None
+        } else {
+            keyword(rest)
+        };
+        let Some((token, len)) = token else {
+            out.push(c);
+            i += 1;
+            continue;
+        };
+        let is = |t: u8| token == u16::from(t);
+        if is(APOSTROPHE) || is(BANG) || is(ELSE) {
+            out.push(b':');
+        }
+        out.extend_from_slice(&token_bytes(token));
+        i += len;
+        if is(REM) || is(APOSTROPHE) || is(BANG) {
+            out.extend_from_slice(&text[i..]);
+            return out;
+        }
+        if token == DATA {
+            // As typed up to the end of the statement.
+            let mut quoted = false;
+            while i < text.len() && (quoted || text[i] != b':') {
+                quoted ^= text[i] == b'"';
+                out.push(text[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Encoded functions are written as `$FF` and a byte; this marks them in
+/// [`keyword`]'s result.
+const FUNCTION_FLAG: u16 = 0x100;
+
+fn token_bytes(token: u16) -> Vec<u8> {
+    if token & FUNCTION_FLAG != 0 {
+        vec![FUNCTION_PREFIX, token as u8]
+    } else {
+        vec![token as u8]
+    }
+}
+
+/// The keyword `text` starts with, as (token, length): the first in table
+/// order, keywords then functions, that isn't followed by a letter when it
+/// ends in one (so a name like PUTIOCB isn't crunched).
+fn keyword(text: &[u8]) -> Option<(u16, usize)> {
+    let fits = |name: &str| {
+        let n = name.as_bytes();
+        text.starts_with(n)
+            && !(n.last().is_some_and(|c| c.is_ascii_alphabetic())
+                && text.get(n.len()).is_some_and(|c| c.is_ascii_alphabetic()))
+    };
+    for (k, name) in KEYWORDS.iter().enumerate() {
+        if !name.is_empty() && *name != "'" && *name != "!" && fits(name) {
+            return Some((u16::from(FIRST_KEYWORD) + k as u16, name.len()));
+        }
+    }
+    for (k, name) in FUNCTIONS.iter().enumerate() {
+        if fits(name) {
+            return Some((
+                FUNCTION_FLAG | (u16::from(FIRST_FUNCTION) + k as u16),
+                name.len(),
+            ));
+        }
+    }
+    None
 }
 
 /// One line's text as LIST shows it:
@@ -387,6 +546,39 @@ mod tests {
         }
         assert!(MicrosoftBasic.detect(&locked));
         assert_eq!(listing(&locked), listing(&plain));
+    }
+
+    #[test]
+    fn crunches_back_the_same() {
+        let f = file(&[
+            (10, b"\x98 HELLO"),
+            (20, b":\x9a APOSTROPHE"),
+            (30, b"\xab\"HI|:\xab \"Q| ::\x9bX"),
+            // PRINT followed by a space is always $AB ("PRINT "), as
+            // Microsoft BASIC stores it.
+            (40, b"\x97 A\xf71 \x9d \xab\"Y| :\x9c \xab\"N|"),
+            (50, b"X\xf7\xff\xaf(1536)\xee\xff\xc5"),
+            (60, b"PUTIOCB\xf7ADDR\xee61"),
+            (70, b"\x84 1,2, THREE:\xab"),
+        ]);
+        let text = MicrosoftBasic.decode(&f).unwrap().lines;
+        let ours = encode(&text).unwrap();
+        // The same line contents (the next-line addresses depend on where
+        // the program starts in memory).
+        assert_eq!(MicrosoftBasic.decode(&ours).unwrap().lines, text);
+        assert_eq!(lines_of(&ours), lines_of(&f));
+    }
+
+    /// Each line's number and stored text, without the addresses.
+    fn lines_of(f: &[u8]) -> Vec<Vec<u8>> {
+        let mut v = Vec::new();
+        let mut i = 3;
+        while f[i] != 0 || f[i + 1] != 0 {
+            let end = i + 4 + f[i + 4..].iter().position(|&b| b == 0).unwrap();
+            v.push(f[i + 2..end].to_vec());
+            i = end + 1;
+        }
+        v
     }
 
     #[test]
