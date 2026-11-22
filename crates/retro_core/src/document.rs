@@ -207,15 +207,23 @@ impl Document {
         };
     }
 
-    /// Move to the next multiple of `width` columns, padding with `space`
-    /// if that is past the end of the line.
-    pub fn next_tab_stop(&mut self, width: usize, space: u8) {
-        let target = (self.cursor.col / width + 1) * width;
-        let len = self.lines[self.cursor.line].len();
-        if target > len {
-            self.cur_line_mut().resize(target, space);
+    /// Move to column `col` of the current line, padding with `space` if
+    /// that is past the end of the line.
+    pub fn move_to_col_padded(&mut self, col: usize, space: u8) {
+        if col > self.lines[self.cursor.line].len() {
+            self.cur_line_mut().resize(col, space);
         }
-        self.cursor.col = target;
+        self.cursor.col = col;
+    }
+
+    /// Move to the start of the next line, if there is one.
+    pub fn next_line_start(&mut self) {
+        if self.cursor.line + 1 < self.lines.len() {
+            self.cursor = Pos {
+                line: self.cursor.line + 1,
+                col: 0,
+            };
+        }
     }
 }
 
@@ -293,12 +301,18 @@ mod tests {
     }
 
     #[test]
-    fn tab_pads_with_spaces() {
-        let mut d = doc(&["AB"]);
+    fn moving_past_line_end_pads_with_spaces() {
+        let mut d = doc(&["AB", "C"]);
         d.set_cursor(Pos { line: 0, col: 2 });
-        d.next_tab_stop(8, b' ');
+        d.move_to_col_padded(8, b' ');
         assert_eq!(d.cursor().col, 8);
+        assert_eq!(d.line(0), b"AB      ");
+        d.move_to_col_padded(3, b' ');
         assert_eq!(d.line(0).len(), 8);
+        d.next_line_start();
+        assert_eq!(d.cursor(), Pos { line: 1, col: 0 });
+        d.next_line_start();
+        assert_eq!(d.cursor(), Pos { line: 1, col: 0 });
     }
 
     #[test]

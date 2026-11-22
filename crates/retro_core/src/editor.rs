@@ -4,9 +4,7 @@ use crate::document::Document;
 use crate::input::EditAction;
 use crate::layout::{Layout, WrapMode};
 use crate::machine::Machine;
-
-/// Logical columns between tab stops.
-pub const TAB_WIDTH: usize = 8;
+use crate::tabs::TabStops;
 
 #[derive(Debug, Clone)]
 pub struct Editor {
@@ -14,18 +12,28 @@ pub struct Editor {
     pub wrap: WrapMode,
     /// First visible screen row.
     pub top: usize,
+    pub tabs: TabStops,
     /// Column to aim for when moving up/down through shorter lines.
     want_x: Option<usize>,
+    /// A short message for the status bar, taken by the front end.
+    note: Option<String>,
 }
 
 impl Editor {
-    pub fn new(doc: Document, wrap: WrapMode) -> Self {
+    pub fn new(doc: Document, wrap: WrapMode, tabs: TabStops) -> Self {
         Self {
             doc,
             wrap,
             top: 0,
+            tabs,
             want_x: None,
+            note: None,
         }
+    }
+
+    /// Take the pending status-bar message, if any.
+    pub fn take_note(&mut self) -> Option<String> {
+        self.note.take()
     }
 
     /// Screen layout for a window of `win_cols` x `win_rows` text cells.
@@ -76,7 +84,27 @@ impl Editor {
                 LineEnd => doc.line_end(),
                 DocStart => doc.doc_start(),
                 DocEnd => doc.doc_end(),
-                NextTabStop => doc.next_tab_stop(TAB_WIDTH, machine.space()),
+                NextTabStop => match self.tabs.next(doc.cursor().col) {
+                    Some(col) => doc.move_to_col_padded(col, machine.space()),
+                    // No more stops in the logical line: go to the next line.
+                    Option::None => doc.next_line_start(),
+                },
+                SetTabStop | ClearTabStop => {
+                    let col = doc.cursor().col;
+                    let set = action == SetTabStop;
+                    let ok = if set {
+                        self.tabs.set(col)
+                    } else {
+                        self.tabs.clear(col)
+                    };
+                    self.note = Some(if !ok {
+                        "No tab stops past the logical line".into()
+                    } else if set {
+                        format!("Tab stop set at column {}", col + 1)
+                    } else {
+                        format!("Tab stop cleared at column {}", col + 1)
+                    });
+                }
                 ToggleOverwrite => doc.overwrite = !doc.overwrite,
                 ToggleInverse | EscapePending => {}
                 EditAction::None => return false,

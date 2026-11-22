@@ -120,6 +120,8 @@ impl AtariKeyboard {
             Key::Insert if mods.shift => EditAction::InsertLine,
             Key::Insert if mods.control => EditAction::InsertSpace,
             Key::Insert => EditAction::ToggleOverwrite,
+            Key::Tab if mods.shift => EditAction::SetTabStop,
+            Key::Tab if mods.control => EditAction::ClearTabStop,
             Key::Tab => EditAction::NextTabStop,
         }
     }
@@ -237,5 +239,8 @@ mod tests {
         assert_eq!(kb.handle(KeyInput::shifted(Insert)), EditAction::InsertLine);
         assert_eq!(press(&mut kb, Insert), EditAction::ToggleOverwrite);
         assert_eq!(press(&mut kb, Enter), EditAction::NewLine);
+        assert_eq!(press(&mut kb, Tab), EditAction::NextTabStop);
+        assert_eq!(kb.handle(KeyInput::shifted(Tab)), EditAction::SetTabStop);
+        assert_eq!(kb.handle(KeyInput::control(Tab)), EditAction::ClearTabStop);
     }
 }

@@ -28,8 +28,12 @@ const HELP: &[&str] = &[
     "Esc Insert      Insert-char character",
     "Esc CONTROL+2   Bell character",
     "",
-    "Keys with no Atari equivalent (` { } ~)",
-    "are ignored.",
+    "Tab stops start at screen columns 7, 15,",
+    "23, 31 and 39 of each row, as at power-up.",
+    "",
+    "The ` key is the Atari inverse key. Keys",
+    "with no Atari equivalent ({ } ~) are",
+    "ignored.",
 ];
 
 fn about() -> &'static str {

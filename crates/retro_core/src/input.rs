@@ -94,6 +94,10 @@ pub enum EditAction {
     DocStart,
     DocEnd,
     NextTabStop,
+    /// Set a tab stop at the cursor column.
+    SetTabStop,
+    /// Clear the tab stop at the cursor column.
+    ClearTabStop,
     ToggleOverwrite,
     ToggleInverse,
     /// ESC was pressed: the next key is inserted literally.

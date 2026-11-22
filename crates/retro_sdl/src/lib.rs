@@ -13,7 +13,7 @@ use retro_core::{
 };
 use sdl2::audio::{AudioQueue, AudioSpecDesired};
 use sdl2::event::{Event, WindowEvent};
-use sdl2::keyboard::{Keycode, Mod};
+use sdl2::keyboard::{Keycode, Mod, Scancode};
 use sdl2::mouse::MouseButton;
 use sdl2::pixels::Color;
 
@@ -58,19 +58,27 @@ struct App {
     overlay: Overlay,
     overlay_top: usize,
     running: bool,
+    /// The last key press was handled as a command, so the text it would
+    /// type (e.g. the `` ` `` of the inverse key) must be ignored.
+    swallow_text: bool,
 }
 
 /// Open `file` (if given) and run the editor until the user quits.
 pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     let config = Config::load(spec.app_id);
     let mut app = App {
-        editor: Editor::new(Document::new(), config.wrap),
+        editor: Editor::new(
+            Document::new(),
+            config.wrap,
+            spec.machine.default_tab_stops(),
+        ),
         config,
         spec,
         path: None,
         message: None,
         quit_armed: false,
         overlay: Overlay::None,
+        swallow_text: false,
         overlay_top: 0,
         running: true,
     };
@@ -160,9 +168,19 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 }
                 Event::KeyDown {
                     keycode: Some(k),
+                    scancode,
                     keymod,
                     ..
                 } => {
+                    app.swallow_text = false;
+                    // The key left of 1 (`/~ on US keyboards) is the Atari
+                    // inverse key, wherever the layout puts its symbols.
+                    let k = if scancode == Some(Scancode::Grave) {
+                        app.swallow_text = true;
+                        Keycode::F6
+                    } else {
+                        k
+                    };
                     let clicked = app.key_down(k, keymod, &layout);
                     if clicked
                         && app.config.key_click
@@ -177,7 +195,8 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 }
                 Event::TextInput { text, .. } => {
                     let held = keyboard_util.mod_state();
-                    if app.overlay == Overlay::None && !app.ctrl_held(held) {
+                    let swallow = std::mem::take(&mut app.swallow_text);
+                    if app.overlay == Overlay::None && !app.ctrl_held(held) && !swallow {
                         for c in text.chars() {
                             app.machine_key(KeyInput::plain(Key::Char(c)), &layout);
                         }
@@ -273,10 +292,11 @@ impl App {
                     doc.mark_modified();
                     self.message = Some(format!("Converted from {from}; will save as native"));
                 }
-                self.editor = Editor::new(doc, self.config.wrap);
+                self.editor = Editor::new(doc, self.config.wrap, self.editor.tabs.clone());
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                self.editor = Editor::new(Document::new(), self.config.wrap);
+                self.editor =
+                    Editor::new(Document::new(), self.config.wrap, self.editor.tabs.clone());
                 self.message = Some("New file".into());
             }
             Err(e) => {
@@ -326,6 +346,9 @@ impl App {
         }
         self.editor
             .apply(action, layout, self.spec.machine.as_ref());
+        if let Some(note) = self.editor.take_note() {
+            self.message = Some(note);
+        }
     }
 
     /// Handle a key press. Returns true if it should click.
@@ -635,7 +658,7 @@ impl App {
              Ctrl+Home/End Start/end of file\n\
              Ctrl+ +/-     Zoom in/out\n\
              F4            40 columns / window width\n\
-             F6            Inverse video on/off\n\
+             ` or F6       Inverse video on/off (Atari key)\n\
              F7            Key click on/off\n\
              F8            CONTROL key: {ctrl}\n\
              F10           About and licences\n\
@@ -644,6 +667,8 @@ impl App {
              Shift+Insert  Insert line\n\
              Shift+Delete  Delete line\n\
              Tab           Next tab stop\n\
+             Shift+Tab     Set tab stop at cursor\n\
+             CONTROL+Tab   Clear tab stop at cursor\n\
              \n",
             self.spec.title.to_uppercase()
         );

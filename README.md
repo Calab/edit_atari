@@ -19,7 +19,12 @@ character set is built in.
   - **Esc** before a key inserts that key's character instead of performing
     its action, as on the Atari: Esc then cursor-up inserts the up-arrow
     character.
-  - **F6** turns inverse video on or off for typed characters.
+  - The **`** key (left of 1; also **F6**) is the Atari inverse key: it
+    turns inverse video on or off for typed characters.
+  - **Tab** follows the Atari's tab stops (power-up stops at screen columns
+    7, 15, 23, 31 and 39 of each row). Shift+Tab sets a stop at the cursor
+    and CONTROL+Tab clears one; with no stops left in the logical line, Tab
+    moves to the start of the next line.
 - 40-column Atari layout with the 2-column margin, or wrapping at the window
   width (F4).
 - The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it

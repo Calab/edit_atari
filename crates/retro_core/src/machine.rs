@@ -1,6 +1,7 @@
 //! The interface each target computer implements.
 
 use crate::document::Document;
+use crate::tabs::TabStops;
 
 /// Result of decoding a file from disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,12 @@ pub trait Machine {
     /// text (status bar, help). Defaults to the ASCII value itself.
     fn ascii_code(&self, c: char) -> u8 {
         if c.is_ascii() { c as u8 } else { b'?' }
+    }
+
+    /// Tab stops at start-up. The default is every 8 text columns.
+    fn default_tab_stops(&self) -> TabStops {
+        let m = self.left_margin();
+        TabStops::every(8, m + 8, self.screen_columns(), m, 3)
     }
 
     /// Decode a file's bytes into lines.

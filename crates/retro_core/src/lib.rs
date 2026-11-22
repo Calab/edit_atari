@@ -11,9 +11,11 @@ pub mod editor;
 pub mod input;
 pub mod layout;
 pub mod machine;
+pub mod tabs;
 
 pub use document::{Document, Pos};
 pub use editor::Editor;
 pub use input::{EditAction, Key, KeyInput, KeyboardRules, Mods};
 pub use layout::{Layout, WrapMode};
 pub use machine::{Decoded, Machine};
+pub use tabs::TabStops;
