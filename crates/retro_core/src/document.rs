@@ -16,7 +16,26 @@ pub struct Document {
     pub final_eol: bool,
     /// Overwrite (true) or insert (false) typing mode.
     pub overwrite: bool,
-    modified: bool,
+    /// Identifies the current contents; every edit gets a new number, so
+    /// undoing back to the saved contents makes the document unmodified.
+    version: u64,
+    saved_version: u64,
+    last_version: u64,
+}
+
+/// A copy of a document's contents, for undo/redo.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    lines: Vec<Vec<u8>>,
+    cursor: Pos,
+    version: u64,
+}
+
+impl Snapshot {
+    /// The document version this snapshot holds.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
 }
 
 impl Default for Document {
@@ -40,7 +59,9 @@ impl Document {
             cursor: Pos::default(),
             final_eol,
             overwrite: false,
-            modified: false,
+            version: 0,
+            saved_version: 0,
+            last_version: 0,
         }
     }
 
@@ -67,21 +88,97 @@ impl Document {
         self.cursor = Pos { line, col };
     }
 
+    /// Identifies the current contents (changes on every edit).
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     pub fn is_modified(&self) -> bool {
-        self.modified
+        self.version != self.saved_version
     }
 
     pub fn mark_modified(&mut self) {
-        self.modified = true;
+        self.touch();
     }
 
     pub fn mark_saved(&mut self) {
-        self.modified = false;
+        self.saved_version = self.version;
+    }
+
+    /// Record that the contents changed.
+    fn touch(&mut self) {
+        self.last_version += 1;
+        self.version = self.last_version;
     }
 
     fn cur_line_mut(&mut self) -> &mut Vec<u8> {
-        self.modified = true;
+        self.touch();
         &mut self.lines[self.cursor.line]
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            lines: self.lines.clone(),
+            cursor: self.cursor,
+            version: self.version,
+        }
+    }
+
+    pub fn restore(&mut self, s: Snapshot) {
+        self.lines = s.lines;
+        self.cursor = s.cursor;
+        self.version = s.version;
+    }
+
+    /// The text between two positions (`a` before `b`), as lines.
+    pub fn text_range(&self, a: Pos, b: Pos) -> Vec<Vec<u8>> {
+        if a.line == b.line {
+            return vec![self.lines[a.line][a.col..b.col].to_vec()];
+        }
+        let mut out = vec![self.lines[a.line][a.col..].to_vec()];
+        out.extend(self.lines[a.line + 1..b.line].iter().cloned());
+        out.push(self.lines[b.line][..b.col].to_vec());
+        out
+    }
+
+    /// Delete the text between two positions (`a` before `b`), leaving the
+    /// cursor at `a`.
+    pub fn delete_range(&mut self, a: Pos, b: Pos) {
+        self.touch();
+        let tail = self.lines[b.line][b.col..].to_vec();
+        self.lines.drain(a.line + 1..=b.line);
+        let line = &mut self.lines[a.line];
+        line.truncate(a.col);
+        line.extend(tail);
+        self.cursor = a;
+    }
+
+    /// Insert text (one or more lines) at the cursor, leaving the cursor
+    /// after it. Always inserts, even in overwrite mode.
+    pub fn insert_text(&mut self, text: &[Vec<u8>]) {
+        let Some((last, first_lines)) = text.split_last() else {
+            return;
+        };
+        let Pos { line, col } = self.cursor;
+        self.touch();
+        if first_lines.is_empty() {
+            self.lines[line].splice(col..col, last.iter().copied());
+            self.cursor.col += last.len();
+            return;
+        }
+        let tail = self.lines[line].split_off(col);
+        self.lines[line].extend_from_slice(&first_lines[0]);
+        let mut new_lines: Vec<Vec<u8>> = first_lines[1..].to_vec();
+        let mut end = last.clone();
+        let end_col = end.len();
+        end.extend(tail);
+        new_lines.push(end);
+        let n = new_lines.len();
+        self.lines.splice(line + 1..line + 1, new_lines);
+        self.cursor = Pos {
+            line: line + n,
+            col: end_col,
+        };
     }
 
     /// Type a code at the cursor, honouring insert/overwrite mode.
@@ -116,7 +213,7 @@ impl Document {
             self.cursor.col -= 1;
         } else if line > 0 {
             let removed = self.lines.remove(line);
-            self.modified = true;
+            self.touch();
             let prev = &mut self.lines[line - 1];
             let new_col = prev.len();
             prev.extend(removed);
@@ -146,7 +243,7 @@ impl Document {
 
     /// Delete the whole current line (Atari SHIFT+DELETE).
     pub fn delete_line(&mut self) {
-        self.modified = true;
+        self.touch();
         if self.lines.len() == 1 {
             self.lines[0].clear();
         } else {
@@ -158,7 +255,7 @@ impl Document {
 
     /// Insert an empty line above the current one (Atari SHIFT+INSERT).
     pub fn insert_line(&mut self) {
-        self.modified = true;
+        self.touch();
         self.lines.insert(self.cursor.line, Vec::new());
         self.cursor.col = 0;
     }
@@ -313,6 +410,38 @@ mod tests {
         assert_eq!(d.cursor(), Pos { line: 1, col: 0 });
         d.next_line_start();
         assert_eq!(d.cursor(), Pos { line: 1, col: 0 });
+    }
+
+    #[test]
+    fn ranges_copy_delete_and_insert() {
+        let mut d = doc(&["ONE", "TWO", "THREE"]);
+        let (a, b) = (Pos { line: 0, col: 1 }, Pos { line: 2, col: 2 });
+        let t = d.text_range(a, b);
+        assert_eq!(t, vec![b"NE".to_vec(), b"TWO".to_vec(), b"TH".to_vec()]);
+        d.delete_range(a, b);
+        assert_eq!(text(&d), ["OREE"]);
+        assert_eq!(d.cursor(), a);
+        d.insert_text(&t);
+        assert_eq!(text(&d), ["ONE", "TWO", "THREE"]);
+        assert_eq!(d.cursor(), b);
+        d.set_cursor(Pos { line: 1, col: 1 });
+        d.insert_text(&[b"XY".to_vec()]);
+        assert_eq!(text(&d), ["ONE", "TXYWO", "THREE"]);
+        assert_eq!(d.cursor(), Pos { line: 1, col: 3 });
+    }
+
+    #[test]
+    fn modified_tracks_saved_version() {
+        let mut d = doc(&["A"]);
+        assert!(!d.is_modified());
+        let before = d.snapshot();
+        d.type_code(b'B');
+        assert!(d.is_modified());
+        d.restore(before);
+        assert!(!d.is_modified());
+        d.type_code(b'C');
+        d.mark_saved();
+        assert!(!d.is_modified());
     }
 
     #[test]

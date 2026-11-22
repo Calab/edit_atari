@@ -51,7 +51,8 @@ jobs:
           mkdir "$dir"
           cp "target/release/${{ matrix.exe }}" "$dir/"
           cp LICENSE README.md "$dir/"
-          cp assets/fonts/atari/OFL.txt "$dir/FONT-LICENSE-OFL.txt"
+          cp assets/fonts/atari/OFL.txt "$dir/FONT-LICENSE-ATARI-OFL.txt"
+          cp assets/fonts/ui/OFL.txt "$dir/FONT-LICENSE-NOTO-OFL.txt"
 
       - uses: actions/upload-artifact@v4
         with:

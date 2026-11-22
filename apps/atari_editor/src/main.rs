@@ -69,6 +69,12 @@ fn main() -> ExitCode {
             border: (0x00, 0x00, 0x00),
             warning: (0xFF, 0xA8, 0x40),
         },
+        file_types: (
+            "Atari text files",
+            &[
+                "lst", "LST", "txt", "TXT", "asm", "ASM", "m65", "M65", "act", "ACT",
+            ],
+        ),
         help: HELP,
         about: about(),
     };

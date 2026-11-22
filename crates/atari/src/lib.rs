@@ -47,6 +47,23 @@ impl Machine for Atari {
         TabStops::every(8, 7, 40, 2, 3)
     }
 
+    /// ATASCII characters that match ASCII stay ASCII on the clipboard;
+    /// graphics, arrows, inverse etc. use U+E000 + code, the private-use
+    /// range where the EightBit Atari font puts the same glyphs.
+    fn char_for_code(&self, code: u8) -> char {
+        match code {
+            0x20..=0x5F | 0x61..=0x7A | 0x7C => code as char,
+            _ => char::from_u32(0xE000 + code as u32).unwrap(),
+        }
+    }
+
+    fn code_for_char(&self, c: char) -> Option<u8> {
+        match c as u32 {
+            n @ 0xE000..=0xE0FF => Some((n - 0xE000) as u8),
+            _ => keyboard::printable(c),
+        }
+    }
+
     fn decode(&self, bytes: &[u8]) -> Decoded {
         atascii::decode(bytes)
     }
@@ -68,7 +85,7 @@ mod tests {
         let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
         let layout = ed.layout(&m, 40, 24);
         let tab = |ed: &mut Editor, a| {
-            ed.apply(a, &layout, &m);
+            ed.apply(a, &layout, &m, false);
             ed.doc.cursor()
         };
         // Screen column 7 = text column 5; the line is padded with spaces.
@@ -90,6 +107,61 @@ mod tests {
         ed.doc.set_cursor(Pos { line: 0, col: 43 });
         ed.doc.move_to_col_padded(113, b' ');
         assert_eq!(tab(&mut ed, NextTabStop), Pos { line: 1, col: 0 });
+    }
+
+    #[test]
+    fn clipboard_round_trips_every_code() {
+        use retro_core::clipboard::{from_text, to_text};
+        let m = Atari;
+        let all: Vec<u8> = (0..=255).filter(|&c| c != atascii::EOL).collect();
+        let text = to_text(std::slice::from_ref(&all), &m);
+        assert!(text.starts_with('\u{E000}'));
+        assert!(text.contains("ABC"));
+        let (lines, skipped) = from_text(&text, &m);
+        assert_eq!((lines, skipped), (vec![all], 0));
+        // Text from other programs: unknown characters are skipped.
+        let (lines, skipped) = from_text("A{b}\r\nC\t\u{2665}", &m);
+        assert_eq!(lines, vec![b"Ab".to_vec(), b"C ".to_vec()]);
+        assert_eq!(skipped, 3);
+    }
+
+    #[test]
+    fn undo_selection_and_paste() {
+        use retro_core::{EditAction::*, Editor, Pos, WrapMode};
+        let m = Atari;
+        let doc = Document::from_lines(vec![b"HELLO".to_vec()], true);
+        let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
+        let layout = ed.layout(&m, 40, 24);
+        ed.doc.set_cursor(Pos { line: 0, col: 5 });
+        // Typing is one undo step.
+        for &c in b" WORLD" {
+            ed.apply(Insert(c), &layout, &m, false);
+        }
+        assert_eq!(ed.doc.line(0), b"HELLO WORLD");
+        assert!(ed.undo(&layout));
+        assert_eq!(ed.doc.line(0), b"HELLO");
+        assert!(!ed.doc.is_modified());
+        assert!(ed.redo(&layout));
+        assert_eq!(ed.doc.line(0), b"HELLO WORLD");
+        // Shift+Left x5 selects WORLD; typing replaces it.
+        for _ in 0..5 {
+            ed.apply(MoveLeft, &layout, &m, true);
+        }
+        assert_eq!(ed.copy(), Some(vec![b"WORLD".to_vec()]));
+        ed.apply(Insert(b'X'), &layout, &m, false);
+        assert_eq!(ed.doc.line(0), b"HELLO X");
+        // Cut and paste across lines.
+        ed.select_all();
+        let cut = ed.cut(&layout).unwrap();
+        assert_eq!(ed.doc.line(0), b"");
+        ed.paste(&cut, &layout);
+        ed.paste(&[b"1".to_vec(), b"2".to_vec()], &layout);
+        assert_eq!(ed.doc.lines(), [b"HELLO X1".to_vec(), b"2".to_vec()]);
+        assert!(ed.undo(&layout));
+        assert!(ed.undo(&layout));
+        assert_eq!(ed.doc.line(0), b"");
+        assert!(ed.undo(&layout));
+        assert_eq!(ed.doc.line(0), b"HELLO X");
     }
 
     #[test]

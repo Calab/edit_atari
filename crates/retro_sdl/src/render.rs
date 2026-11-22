@@ -52,13 +52,15 @@ pub struct Grid<'c, 't> {
     pub atlas: &'c mut Texture<'t>,
     pub cell: u32,
     pub origin_x: i32,
+    /// Y pixel of row 0 (below the menu bar).
+    pub origin_y: i32,
 }
 
 impl Grid<'_, '_> {
     fn rect(&self, col: usize, row: usize, cols: usize) -> Rect {
         Rect::new(
             self.origin_x + (col as u32 * self.cell) as i32,
-            (row as u32 * self.cell) as i32,
+            self.origin_y + (row as u32 * self.cell) as i32,
             self.cell * cols as u32,
             self.cell,
         )

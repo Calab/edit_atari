@@ -34,7 +34,15 @@ character set is built in.
   off).
 - Opens PC text files (LF or CR/LF) and saves them as ATASCII.
 
-Press **F1** in the editor for the full list of keys.
+- File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
+  S, Z, Y, X, C, V, A) and the system's own Open and Save dialogs.
+- Select text with Shift+arrows or the mouse. Copy and paste work with
+  other programs: ordinary characters paste as plain text, and Atari
+  graphics characters use the same private Unicode characters as the
+  EightBit Atari font, so they paste back exactly.
+- Undo and redo.
+
+Press **F1** (or Help > Keyboard Help) for the full list of keys.
 
 ## Usage
 
@@ -42,7 +50,8 @@ Press **F1** in the editor for the full list of keys.
 atari_editor FILE.LST
 ```
 
-If the file doesn't exist it is created when you save (Ctrl+S).
+If the file doesn't exist it is created when you save (Ctrl+S). You can also
+start the editor without a file and use File > Open.
 
 ## Building
 
@@ -97,5 +106,9 @@ grid.
   version 3 or later (see `LICENSE`).
 - The character set is derived from the font "EightBit Atari", © 2018 Steve
   Boswell, used under the SIL Open Font License 1.1 (see
-  `assets/fonts/atari/OFL.txt`). The licence text is also shown in the
-  editor's About screen (F10).
+  `assets/fonts/atari/OFL.txt`).
+- The menus and status bar use the system's interface font. When it can't
+  be found, the built-in Noto Sans (© Google, SIL Open Font License 1.1, see
+  `assets/fonts/ui/OFL.txt`) is used instead.
+- The licence texts are also shown in the editor's About screen
+  (Help > About).

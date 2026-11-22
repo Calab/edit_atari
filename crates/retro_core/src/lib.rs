@@ -6,6 +6,7 @@
 //! keyboard -- lives behind the [`machine::Machine`] trait or in the
 //! machine's own crate.
 
+pub mod clipboard;
 pub mod document;
 pub mod editor;
 pub mod input;
@@ -13,7 +14,7 @@ pub mod layout;
 pub mod machine;
 pub mod tabs;
 
-pub use document::{Document, Pos};
+pub use document::{Document, Pos, Snapshot};
 pub use editor::Editor;
 pub use input::{EditAction, Key, KeyInput, KeyboardRules, Mods};
 pub use layout::{Layout, WrapMode};

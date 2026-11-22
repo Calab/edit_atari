@@ -45,6 +45,27 @@ pub trait Machine {
         TabStops::every(8, m + 8, self.screen_columns(), m, 3)
     }
 
+    /// The Unicode character used for a machine code on the system
+    /// clipboard. Default: printable ASCII as itself, anything else as
+    /// U+E000 + code (a private-use character).
+    fn char_for_code(&self, code: u8) -> char {
+        match code {
+            0x20..=0x7E => code as char,
+            _ => char::from_u32(0xE000 + code as u32).unwrap(),
+        }
+    }
+
+    /// The machine code for a character pasted from the system clipboard,
+    /// or `None` if the machine has no such character. Default: the inverse
+    /// of [`Machine::char_for_code`].
+    fn code_for_char(&self, c: char) -> Option<u8> {
+        match c as u32 {
+            0x20..=0x7E => Some(c as u8),
+            n @ 0xE000..=0xE0FF => Some((n - 0xE000) as u8),
+            _ => None,
+        }
+    }
+
     /// Decode a file's bytes into lines.
     fn decode(&self, bytes: &[u8]) -> Decoded;
 
