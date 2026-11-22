@@ -20,6 +20,34 @@
 
 use retro_core::{Decoded, FileFormat};
 
+/// How LIST indents structured blocks (FOR...NEXT, WHILE...ENDWHILE,
+/// multi-line IF...ENDIF, PROCEDURE...EXIT), 2 spaces per level.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Indent {
+    /// No indenting (Atari BASIC, Turbo-BASIC XL).
+    None,
+    /// BASIC XL: a line starts at the current depth, and each block
+    /// opener adds a level right where it appears, even part way through a
+    /// line (`Print "X":  While B<1`). Closers take effect from the next
+    /// line, so `Next I` stays indented with the block's body.
+    AtOpeners,
+    /// BASIC XE: a line is indented by the blocks open at its start; a
+    /// line starting with a closer or ELSE lines up with its opener.
+    Blocks,
+}
+
+/// A dialect's block statements, for indenting.
+pub struct Blocks {
+    /// Statements that open a block. IF only counts without THEN.
+    openers: &'static [u8],
+    closers: &'static [u8],
+    /// Statements that line up with their opener but keep the block open.
+    middles: &'static [u8],
+}
+
+const IF: u8 = 0x07;
+const THEN: u8 = 0x1B;
+
 /// One BASIC dialect's token tables. A dialect can extend another: its
 /// tables then continue where the base's end, and anything it doesn't
 /// define comes from the base.
@@ -41,6 +69,15 @@ pub struct Dialect {
     spaced: &'static [u8],
     /// Token for a number listed in hex (`$D01F`), followed by 6 BCD bytes.
     hex_number: Option<u8>,
+    /// List keywords in mixed case (`Print`, `Endwhile`), as BASIC XL/XE do.
+    mixed_case: bool,
+    /// List hex constants in lower case (`$ff`), as BASIC XL does.
+    lowercase_hex: bool,
+    indent: Indent,
+    blocks: Blocks,
+    /// Whether a spaced keyword's leading space merges with a space
+    /// already there (Atari BASIC: `IF NOT A`; BASIC XE: `Print  Using`).
+    merge_spaces: bool,
     /// Token for variables 128-255, followed by one byte: the variable
     /// number minus 128. (Variables 0-127 are tokens $80-$FF.)
     high_variable: Option<u8>,
@@ -96,7 +133,7 @@ pub static ATARI_BASIC: Dialect = Dialect {
         "LOAD", "SAVE", "STATUS", "NOTE", "POINT", "XIO", "ON", "POKE", // $18
         "PRINT", "RAD", "READ", "RESTORE", "RETURN", "RUN", "STOP", "POP", // $20
         "?", "GET", "PUT", "GRAPHICS", "PLOT", "POSITION", "DOS", "DRAWTO", // $28
-        "SETCOLOR", "LOCATE", "SOUND", "LPRINT", "CSAVE", "CLOAD", "", "ERROR-", // $30
+        "SETCOLOR", "LOCATE", "SOUND", "LPRINT", "CSAVE", "CLOAD", "", "ERROR-  ", // $30
     ],
     raw_statements: &[0x00, 0x01, 0x37],
     first_operator: FIRST_OPERATOR,
@@ -114,6 +151,16 @@ pub static ATARI_BASIC: Dialect = Dialect {
     spaced: &[0x17, 0x18, 0x19, 0x1A, 0x1B, 0x28, 0x29, 0x2A],
     hex_number: None,
     high_variable: None,
+    mixed_case: false,
+    merge_spaces: true,
+    lowercase_hex: false,
+    indent: Indent::None,
+    // FOR / NEXT (used to choose between dialects; not indented)
+    blocks: Blocks {
+        openers: &[0x08],
+        closers: &[0x09],
+        middles: &[],
+    },
 };
 
 /// Turbo-BASIC XL's `--` statement lists as a line of 30 dashes.
@@ -144,19 +191,152 @@ pub static TURBO_BASIC_XL: Dialect = Dialect {
     spaced: &[0x5A, 0x5D, 0x61, 0x62, 0x6A],
     hex_number: Some(0x0D),
     high_variable: Some(0x00),
+    mixed_case: false,
+    merge_spaces: true,
+    lowercase_hex: false,
+    indent: Indent::None,
+    // FOR, IF, REPEAT, WHILE, DO, PROC / NEXT, UNTIL, WEND, LOOP, ENDPROC,
+    // ENDIF / ELSE (used to choose between dialects; not indented)
+    blocks: Blocks {
+        openers: &[0x08, 0x07, 0x3C, 0x3E, 0x45, 0x4F],
+        closers: &[0x09, 0x3D, 0x3F, 0x46, 0x51, 0x41],
+        middles: &[0x40],
+    },
+};
+
+/// OSS BASIC XL: Atari BASIC plus statements from $38 and functions from
+/// $55. Tables read from the BASIC XL 1.02/1.03 cartridge ROMs. END moves
+/// to the end of the statement table ($58) so that the keyword search
+/// finds ENDIF and ENDWHILE first; $15 still lists as END.
+pub static BASIC_XL: Dialect = Dialect {
+    name: "BASIC XL",
+    base: Some(&ATARI_BASIC),
+    first_statement: 0x37,
+    statements: &[
+        "ERROR- ", // $37 (Atari BASIC's has two spaces)
+        "WHILE",
+        "ENDWHILE",
+        "TRACEOFF",
+        "TRACE",
+        "ELSE",
+        "ENDIF",
+        "DPOKE",
+        "LOMEM", // $38
+        "DEL",
+        "RPUT",
+        "RGET",
+        "BPUT",
+        "BGET",
+        "TAB",
+        "CP",
+        "ERASE", // $40
+        "PROTECT",
+        "UNPROTECT",
+        "DIR",
+        "RENAME",
+        "MOVE",
+        "MISSILE",
+        "PMCLR",
+        "PMCOLOR", // $48
+        "PMGRAPHICS",
+        "PMMOVE",
+        "PMWIDTH",
+        "SET",
+        "LVAR",
+        "RENUM",
+        "FAST",
+        "NUM", // $50
+        "END", // $58
+    ],
+    raw_statements: &[],
+    first_operator: 0x55,
+    operators: &[
+        "USING", "%", "!", "&", ";", "BUMP(", "FIND(", "HEX$", // $55
+        "RANDOM(", "DPEEK", "SYS", "VSTICK", "HSTICK", "PMADR", "ERR", "TAB", // $5D
+        "PEN", "LEFT$(", "RIGHT$(", "MID$(", // $65
+    ],
+    spaced: &[0x55],
+    hex_number: Some(0x0D),
+    high_variable: None,
+    mixed_case: true,
+    merge_spaces: false,
+    lowercase_hex: true,
+    indent: Indent::AtOpeners,
+    // FOR, IF, WHILE / NEXT, ENDWHILE, ENDIF / ELSE
+    blocks: Blocks {
+        openers: &[0x08, 0x07, 0x38],
+        closers: &[0x09, 0x39, 0x3D],
+        middles: &[0x3C],
+    },
+};
+
+/// OSS BASIC XE: BASIC XL with more statements, from $57 (where it
+/// replaces BASIC XL's NUM and END). Expression tokens are BASIC XL's.
+/// Tables read from the BASIC XE 4.1 cartridge ROM.
+pub static BASIC_XE: Dialect = Dialect {
+    name: "BASIC XE",
+    base: Some(&BASIC_XL),
+    first_statement: 0x57,
+    statements: &[
+        "LOCAL", // $57
+        "EXTEND",
+        "PROCEDURE",
+        "",
+        "CALL",
+        "SORTUP",
+        "SORTDOWN",
+        "EXIT",
+        "NUM", // $58
+        "HITCLR",
+        "INVERSE",
+        "NORMAL",
+        "BLOAD",
+        "BSAVE",
+        "END", // $60
+    ],
+    raw_statements: &[],
+    first_operator: 0,
+    operators: &[],
+    spaced: &[],
+    hex_number: None,
+    high_variable: None,
+    mixed_case: true,
+    merge_spaces: false,
+    lowercase_hex: false,
+    indent: Indent::Blocks,
+    // FOR, IF, WHILE, PROCEDURE / NEXT, ENDWHILE, ENDIF, EXIT / ELSE
+    blocks: Blocks {
+        openers: &[0x08, 0x07, 0x38, 0x59],
+        closers: &[0x09, 0x39, 0x3D, 0x5E],
+        middles: &[0x3C],
+    },
 };
 
 /// A tokenized BASIC file in one dialect.
 pub struct TokenizedBasic {
     pub dialect: &'static Dialect,
+    /// Extensions that mean this dialect (see `FileFormat::extensions`).
+    extensions: &'static [&'static str],
 }
 
 pub static ATARI_BASIC_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &ATARI_BASIC,
+    extensions: &[],
 };
 
 pub static TURBO_BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
     dialect: &TURBO_BASIC_XL,
+    extensions: &["TUR"],
+};
+
+pub static BASIC_XL_FILE: TokenizedBasic = TokenizedBasic {
+    dialect: &BASIC_XL,
+    extensions: &["BXL"],
+};
+
+pub static BASIC_XE_FILE: TokenizedBasic = TokenizedBasic {
+    dialect: &BASIC_XE,
+    extensions: &["BXE"],
 };
 
 impl FileFormat for TokenizedBasic {
@@ -168,9 +348,21 @@ impl FileFormat for TokenizedBasic {
         "BAS"
     }
 
+    fn extensions(&self) -> &'static [&'static str] {
+        self.extensions
+    }
+
     /// The header must be consistent and every token known to the dialect.
     fn detect(&self, bytes: &[u8]) -> bool {
-        Header::read(bytes).is_ok() && self.decode(bytes).is_ok()
+        self.misfit(bytes).is_some()
+    }
+
+    /// Block statements left unpaired when the program is read in this
+    /// dialect (an ENDIF with no IF open, a WHILE never closed...). Dialects
+    /// that share token numbers for different keywords read each other's
+    /// programs as nonsense, which shows up here.
+    fn misfit(&self, bytes: &[u8]) -> Option<usize> {
+        self.list(bytes).ok().map(|(_, misfit)| misfit)
     }
 
     fn looks_like(&self, bytes: &[u8]) -> bool {
@@ -178,11 +370,21 @@ impl FileFormat for TokenizedBasic {
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<Decoded, String> {
+        self.list(bytes).map(|(d, _)| d)
+    }
+}
+
+impl TokenizedBasic {
+    /// The program as LIST text, and how many block statements were left
+    /// unpaired (see `misfit`).
+    fn list(&self, bytes: &[u8]) -> Result<(Decoded, usize), String> {
         let h = Header::read(bytes)?;
         let names = variable_names(&bytes[h.vnt.clone()]);
         let mut lines = Vec::new();
         let program = &bytes[h.program.clone()];
         let mut pos = 0;
+        let mut depth = 0;
+        let (mut open, mut unpaired) = (0usize, 0usize);
         while pos < program.len() {
             let rest = &program[pos..];
             if rest.len() < 3 {
@@ -196,8 +398,16 @@ impl FileFormat for TokenizedBasic {
             if len < 4 || len > rest.len() {
                 return Err(format!("line {number}: bad length"));
             }
-            let line = list_line(self.dialect, &rest[..len], &names)
+            let (line, kinds) = list_line(self.dialect, &rest[..len], &names, &mut depth)
                 .map_err(|e| format!("line {number}: {e}"))?;
+            for k in kinds {
+                match k {
+                    Block::Open => open += 1,
+                    Block::Close | Block::Middle if open == 0 => unpaired += 1,
+                    Block::Close => open -= 1,
+                    _ => {}
+                }
+            }
             let mut text = number.to_string().into_bytes();
             text.push(b' ');
             text.extend(line);
@@ -207,11 +417,12 @@ impl FileFormat for TokenizedBasic {
         if lines.is_empty() {
             lines.push(Vec::new());
         }
-        Ok(Decoded {
+        let decoded = Decoded {
             lines,
             final_eol: true,
             converted_from: None,
-        })
+        };
+        Ok((decoded, unpaired + open))
     }
 }
 
@@ -268,46 +479,111 @@ fn variable_names(table: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// One program line's statements as LIST text (without the line number).
-fn list_line(d: &Dialect, line: &[u8], names: &[Vec<u8>]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
+/// `depth` is the number of blocks open, carried from line to line.
+fn list_line(
+    d: &Dialect,
+    line: &[u8],
+    names: &[Vec<u8>],
+    depth: &mut usize,
+) -> Result<(Vec<u8>, Vec<Block>), String> {
+    // Split into statements first: indenting depends on the whole line.
+    let mut statements = Vec::new();
     let mut pos = 3;
     while pos < line.len() {
         let next = line[pos] as usize;
         if next <= pos + 1 || next > line.len() {
             return Err("bad statement".into());
         }
-        let token = line[pos + 1];
-        let body = &line[pos + 2..next];
+        statements.push((line[pos + 1], &line[pos + 2..next]));
+        pos = next;
+    }
+
+    let mut out = Vec::new();
+    let mut texts = Vec::new();
+    for &(token, body) in &statements {
+        let mut text = Vec::new();
         let keyword = d
             .statement(token)
             .ok_or_else(|| format!("unknown statement token ${token:02X}"))?;
-        out.extend_from_slice(keyword.as_bytes());
-        if d.is_raw(token) {
-            let text = body.strip_suffix(&[EOL]).unwrap_or(body);
-            if !text.is_empty() && text[0] != b' ' {
-                out.push(b' ');
-            }
-            out.extend_from_slice(text);
-        } else {
-            // LIST puts a space after every keyword, even with nothing
-            // after it: `PRINT :`, `END `.
-            if !keyword.is_empty() {
-                out.push(b' ');
-            }
-            list_tokens(d, body, names, &mut out)?;
+        push_keyword(d, keyword, &mut text);
+        // LIST puts a space after every keyword, even with nothing after
+        // it (`PRINT :`, `END `), except Turbo-BASIC's line of dashes.
+        if !keyword.is_empty() && keyword != DASHES {
+            text.push(b' ');
         }
-        pos = next;
+        let ops = if d.is_raw(token) {
+            text.extend_from_slice(body.strip_suffix(&[EOL]).unwrap_or(body));
+            Vec::new()
+        } else {
+            list_tokens(d, body, names, &mut text)?
+        };
+        let b = &d.blocks;
+        let kind = if b.openers.contains(&token) && !(token == IF && ops.contains(&THEN)) {
+            Block::Open
+        } else if b.closers.contains(&token) {
+            Block::Close
+        } else if b.middles.contains(&token) {
+            Block::Middle
+        } else {
+            Block::None
+        };
+        texts.push((kind, text));
     }
-    Ok(out)
+
+    let kinds: Vec<Block> = texts.iter().map(|&(k, _)| k).collect();
+    let indent = |out: &mut Vec<u8>, n: usize| out.extend(std::iter::repeat_n(b' ', 2 * n));
+    match d.indent {
+        Indent::None => texts.into_iter().for_each(|(_, t)| out.extend(t)),
+        Indent::AtOpeners => {
+            indent(&mut out, *depth);
+            let mut closes = 0;
+            for (kind, t) in texts {
+                match kind {
+                    Block::Open => {
+                        *depth += 1;
+                        indent(&mut out, 1);
+                    }
+                    Block::Close => closes += 1,
+                    _ => {}
+                }
+                out.extend(t);
+            }
+            *depth = depth.saturating_sub(closes);
+        }
+        Indent::Blocks => {
+            let back = matches!(texts.first(), Some((Block::Close | Block::Middle, _)));
+            indent(&mut out, depth.saturating_sub(usize::from(back)));
+            for (kind, t) in texts {
+                match kind {
+                    Block::Open => *depth += 1,
+                    Block::Close => *depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                out.extend(t);
+            }
+        }
+    }
+    Ok((out, kinds))
 }
 
-/// Expression tokens as text.
+/// What a statement does to the block structure.
+#[derive(Clone, Copy)]
+enum Block {
+    None,
+    Open,
+    Close,
+    Middle,
+}
+
+/// Expression tokens as text. Returns the operator tokens seen (so IF
+/// can tell whether it has a THEN).
 fn list_tokens(
     d: &Dialect,
     body: &[u8],
     names: &[Vec<u8>],
     out: &mut Vec<u8>,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
+    let mut ops = Vec::new();
     let mut i = 0;
     while i < body.len() {
         let t = body[i];
@@ -329,7 +605,12 @@ fn list_tokens(
             END_OF_LINE => {}
             _ if Some(t) == d.hex_number() => {
                 let n = body.get(i..i + 6).ok_or("number cut short")?;
-                out.extend(format_hex(n.try_into().unwrap()).bytes());
+                let hex = format_hex(n.try_into().unwrap());
+                if d.lowercase_hex {
+                    out.extend(hex.to_ascii_lowercase().bytes());
+                } else {
+                    out.extend(hex.bytes());
+                }
                 i += 6;
             }
             FIRST_VARIABLE.. => variable(names, (t - FIRST_VARIABLE) as usize, out)?,
@@ -342,19 +623,31 @@ fn list_tokens(
                 let name = d
                     .operator(t)
                     .ok_or_else(|| format!("unknown token ${t:02X}"))?;
+                ops.push(t);
                 if d.is_spaced(t) {
-                    if out.last() != Some(&b' ') {
+                    if !(d.merge_spaces && out.last() == Some(&b' ')) {
                         out.push(b' ');
                     }
-                    out.extend_from_slice(name.as_bytes());
+                    push_keyword(d, name, out);
                     out.push(b' ');
                 } else {
-                    out.extend_from_slice(name.as_bytes());
+                    push_keyword(d, name, out);
                 }
             }
         }
     }
-    Ok(())
+    Ok(ops)
+}
+
+/// A keyword in the dialect's case: `PRINT`, or `Print` in BASIC XE.
+fn push_keyword(d: &Dialect, keyword: &str, out: &mut Vec<u8>) {
+    for (i, b) in keyword.bytes().enumerate() {
+        out.push(if d.mixed_case && i > 0 {
+            b.to_ascii_lowercase()
+        } else {
+            b
+        });
+    }
 }
 
 /// Variable `n`'s name.
@@ -555,7 +848,7 @@ mod tests {
         ];
         l10[3] = l10.len() as u8;
         let rem_at = l10.len();
-        l10.extend([0, 0x00, b' ', b'C', b'O', b'M', b'M', b'E', b'N', b'T', EOL]);
+        l10.extend([0, 0x00, b'C', b'O', b'M', b'M', b'E', b'N', b'T', EOL]);
         l10[rem_at] = l10.len() as u8;
         l10[2] = l10.len() as u8;
         // 20 FOR I=1 TO 10

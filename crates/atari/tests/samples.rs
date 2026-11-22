@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use atari::basic::{ATARI_BASIC_FILE, TURBO_BASIC_XL_FILE};
+use atari::basic::{ATARI_BASIC_FILE, BASIC_XE_FILE, BASIC_XL_FILE, TURBO_BASIC_XL_FILE};
 use retro_core::FileFormat;
 
 fn samples(dir: &str) -> Vec<PathBuf> {
@@ -109,4 +109,41 @@ fn atari_basic_programs_are_also_turbo_basic() {
 fn reference_listings_match() {
     check_listings("Atari BASIC", &ATARI_BASIC_FILE);
     check_listings("Turbo BASIC XL", &TURBO_BASIC_XL_FILE);
+    check_listings("OSS BASIC XL-XE/BASIC XL", &BASIC_XL_FILE);
+    check_listings("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE);
+}
+
+#[test]
+fn oss_basic_programs_list() {
+    for (dir, format) in [
+        ("OSS BASIC XL-XE/BASIC XL", &BASIC_XL_FILE),
+        ("OSS BASIC XL-XE/BASIC XE", &BASIC_XE_FILE),
+    ] {
+        for p in programs(dir) {
+            let bytes = std::fs::read(&p).unwrap();
+            if let Err(e) = format.decode(&bytes) {
+                panic!("{}: {e}", p.display());
+            }
+        }
+    }
+}
+
+/// Each sample reads as its own dialect even without its extension (as
+/// if it were called .BAS), so detection works on content alone.
+#[test]
+fn dialect_detected_from_content() {
+    use retro_core::{Machine, format};
+    let formats = atari::Atari::default().formats();
+    for (dir, want) in [
+        ("Atari BASIC", "Atari BASIC"),
+        ("Turbo BASIC XL", "Turbo-BASIC XL"),
+        ("OSS BASIC XL-XE/BASIC XL", "BASIC XL"),
+        ("OSS BASIC XL-XE/BASIC XE", "BASIC XE"),
+    ] {
+        for p in programs(dir) {
+            let bytes = std::fs::read(&p).unwrap();
+            let got = format::detect(formats, &bytes, None).name();
+            assert_eq!(got, want, "{}", p.display());
+        }
+    }
 }

@@ -12,6 +12,7 @@ use crate::ui_font::UiFont;
 pub enum Command {
     New,
     Open,
+    ReopenAs,
     Save,
     SaveAs,
     Quit,
@@ -71,6 +72,7 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
             items: vec![
                 item("&New", "Ctrl+N", New),
                 item("&Open...", "Ctrl+O", Open),
+                item("&Reopen As...", "", ReopenAs),
                 SEP,
                 item("&Save", "Ctrl+S", Save),
                 item("Save &As...", "Ctrl+Shift+S", SaveAs),

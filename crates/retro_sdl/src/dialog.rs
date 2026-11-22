@@ -25,6 +25,9 @@ pub enum Purpose {
     About,
     /// "Save changes?" before doing something that discards the document.
     SaveChanges(After),
+    /// Choose a format to read the current file in; the buttons are the
+    /// formats' names, then Cancel.
+    ReopenAs,
 }
 
 pub struct Dialog {
@@ -66,6 +69,22 @@ impl Dialog {
         }
     }
 
+    /// Buttons: one per format name, then Cancel.
+    pub fn reopen_as(file_name: &str, formats: Vec<&'static str>, current: usize) -> Self {
+        let cancel = formats.len();
+        let mut buttons = formats;
+        buttons.push("Cancel");
+        Self {
+            purpose: Purpose::ReopenAs,
+            title: "Reopen As".into(),
+            text: format!("Read {file_name} as:"),
+            buttons,
+            focus: current,
+            cancel,
+            button_rects: Vec::new(),
+        }
+    }
+
     pub fn button_at(&self, x: i32, y: i32) -> Option<usize> {
         self.button_rects
             .iter()
@@ -103,10 +122,19 @@ impl Dialog {
             .max()
             .unwrap_or(0)
             .max(title_w);
-        let w = text_w.max(buttons_total) + pad * 8;
         let title_h = lh + pad * 2;
         let button_h = lh + pad * 2;
-        let h = title_h + pad * 3 + lines.len() as i32 * lh + pad * 4 + button_h + pad * 3;
+        // Buttons in a row, or stacked in a column if a row won't fit.
+        let stacked = buttons_total + pad * 8 > width as i32;
+        let widest = button_w.iter().copied().max().unwrap_or(0);
+        let n = button_w.len() as i32;
+        let (buttons_w, buttons_h) = if stacked {
+            (widest, n * button_h + (n - 1) * pad)
+        } else {
+            (buttons_total, button_h)
+        };
+        let w = text_w.max(buttons_w) + pad * 8;
+        let h = title_h + pad * 3 + lines.len() as i32 * lh + pad * 4 + buttons_h + pad * 3;
         let x = (width as i32 - w) / 2;
         let y = (height as i32 - h) / 2;
 
@@ -127,12 +155,16 @@ impl Dialog {
             ty += lh;
         }
 
-        // Buttons, right-aligned.
-        let by = y + h - pad * 3 - button_h;
+        // Buttons, right-aligned (or a centred column).
+        let mut by = y + h - pad * 3 - buttons_h;
         let mut bx = x + w - pad * 4 - buttons_total;
         self.button_rects.clear();
         for (i, label) in self.buttons.iter().enumerate() {
-            let r = Rect::new(bx, by, button_w[i] as u32, button_h as u32);
+            let bw = if stacked { widest } else { button_w[i] };
+            if stacked {
+                bx = x + (w - widest) / 2;
+            }
+            let r = Rect::new(bx, by, bw as u32, button_h as u32);
             let focused = i == self.focus;
             canvas.set_draw_color(if focused { t.highlight } else { t.bar });
             let _ = canvas.fill_rect(r);
@@ -140,9 +172,13 @@ impl Dialog {
             let _ = canvas.draw_rect(r);
             let lw = font.measure(label);
             let color = if focused { t.highlight_text } else { t.text };
-            font.draw(canvas, bx + (button_w[i] - lw) / 2, by + pad, label, color);
+            font.draw(canvas, bx + (bw - lw) / 2, by + pad, label, color);
             self.button_rects.push(r);
-            bx += button_w[i] + pad * 2;
+            if stacked {
+                by += button_h + pad;
+            } else {
+                bx += bw + pad * 2;
+            }
         }
     }
 }

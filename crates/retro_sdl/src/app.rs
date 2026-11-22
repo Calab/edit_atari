@@ -329,11 +329,18 @@ impl App {
     // ----- files -------------------------------------------------------------
 
     pub fn open_path(&mut self, path: &Path) {
+        self.open_path_as(path, None);
+    }
+
+    /// Open a file, in `forced` format if given, otherwise the format
+    /// `format::detect` picks.
+    fn open_path_as(&mut self, path: &Path, forced: Option<&'static dyn FileFormat>) {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let formats = self.spec.machine.formats();
                 let text = self.spec.machine.text_format();
-                let fmt = format::detect(formats, &bytes);
+                let ext = path.extension().and_then(|e| e.to_str());
+                let fmt = forced.unwrap_or_else(|| format::detect(formats, &bytes, ext));
                 let d = match fmt.decode(&bytes) {
                     Ok(d) => d,
                     Err(e) => {
@@ -355,7 +362,8 @@ impl App {
                     ));
                 }
                 // A file another format would have read, but for damage.
-                if format::same(fmt, text)
+                if forced.is_none()
+                    && format::same(fmt, text)
                     && let Some(f) = formats
                         .iter()
                         .find(|f| !format::same(**f, text) && f.looks_like(&bytes))
@@ -573,7 +581,52 @@ impl App {
                 1 => self.perform(after),
                 _ => {}
             },
+            Purpose::ReopenAs => {
+                let name = d.buttons.get(button).copied();
+                let chosen = self
+                    .spec
+                    .machine
+                    .formats()
+                    .iter()
+                    .copied()
+                    .find(|f| Some(f.name()) == name);
+                if let (Some(f), Some(path)) = (chosen, self.path.clone()) {
+                    self.open_path_as(&path, Some(f));
+                }
+            }
         }
+    }
+
+    /// Offer the formats that can read the current file.
+    fn reopen_as(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.message = Some(format!("Can't read {}: {e}", path.display()));
+                return;
+            }
+        };
+        let formats: Vec<&'static str> = self
+            .spec
+            .machine
+            .formats()
+            .iter()
+            .filter(|f| f.detect(&bytes))
+            .map(|f| f.name())
+            .collect();
+        let current = formats
+            .iter()
+            .position(|&n| n == self.format.name())
+            .unwrap_or(0);
+        self.dialog = Some(Dialog::reopen_as(&self.file_name(), formats, current));
+    }
+
+    /// Test hook: show the Reopen As chooser.
+    pub fn test_reopen_as(&mut self) {
+        self.reopen_as();
     }
 
     /// Show the About box (also used by tests).
@@ -908,6 +961,8 @@ impl App {
             Redo => self.editor.can_redo(),
             Cut | Copy => self.editor.has_selection(),
             Paste => clipboard.has_clipboard_text(),
+            // Only without unsaved changes, which reopening would lose.
+            ReopenAs => self.path.is_some() && !self.editor.doc.is_modified(),
             _ => true,
         };
         let checked = match c {
@@ -932,6 +987,7 @@ impl App {
         match c {
             New => self.guard(After::New),
             Open => self.guard(After::Open),
+            ReopenAs => self.reopen_as(),
             Save => self.save(None),
             SaveAs => self.start_file_job(FileJobKind::SaveAs { then: None }),
             Quit => self.guard(After::Quit),
@@ -1153,9 +1209,9 @@ impl App {
         if let Some(d) = &mut self.dialog {
             let n = d.buttons.len();
             match k {
-                Keycode::LEFT => d.focus = (d.focus + n - 1) % n,
+                Keycode::LEFT | Keycode::UP => d.focus = (d.focus + n - 1) % n,
                 Keycode::TAB if shift => d.focus = (d.focus + n - 1) % n,
-                Keycode::RIGHT | Keycode::TAB => d.focus = (d.focus + 1) % n,
+                Keycode::RIGHT | Keycode::DOWN | Keycode::TAB => d.focus = (d.focus + 1) % n,
                 Keycode::RETURN | Keycode::KP_ENTER | Keycode::SPACE => {
                     let f = d.focus;
                     self.dialog_choose(f);

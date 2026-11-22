@@ -169,11 +169,15 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.open_menu(m);
     }
-    // RETRO_EDITOR_HELP = help | licensing | about
+    // RETRO_EDITOR_HELP = help | licensing | about | prefs | reopen
     app.overlay = match std::env::var("RETRO_EDITOR_HELP").as_deref() {
         Ok("licensing") => app::Overlay::Licensing,
         Ok("prefs") => {
             app.open_prefs(prefs::Field::Wrap);
+            app::Overlay::None
+        }
+        Ok("reopen") => {
+            app.test_reopen_as();
             app::Overlay::None
         }
         Ok("about") => {

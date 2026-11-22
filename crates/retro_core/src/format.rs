@@ -18,9 +18,23 @@ pub trait FileFormat: Sync {
     /// The usual file-name extension, without the dot, e.g. "BAS".
     fn extension(&self) -> &'static str;
 
+    /// File-name extensions (without the dot, any case) that name this
+    /// format specifically, e.g. "BXL". A file with one of these is read in
+    /// this format if it can be.
+    fn extensions(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Whether `bytes` look like a file in this format. Should be cheap and
     /// strict enough not to claim other formats' files.
     fn detect(&self, bytes: &[u8]) -> bool;
+
+    /// How badly `bytes` fit this format when several formats can read
+    /// them (lower is better), or `None` if this format can't. Used to
+    /// choose between formats that share a layout, such as BASIC dialects.
+    fn misfit(&self, bytes: &[u8]) -> Option<usize> {
+        self.detect(bytes).then_some(0)
+    }
 
     /// Whether `bytes` have this format's outward signs (a header, say)
     /// even if [`FileFormat::detect`] rejects them because they're
@@ -43,14 +57,33 @@ pub trait FileFormat: Sync {
     }
 }
 
-/// The first format in `formats` that recognises `bytes`, or the last one
-/// (the machine's text format) if none does.
-pub fn detect(formats: &[&'static dyn FileFormat], bytes: &[u8]) -> &'static dyn FileFormat {
-    formats
-        .iter()
-        .copied()
-        .find(|f| f.detect(bytes))
-        .unwrap_or_else(|| *formats.last().expect("a machine has at least one format"))
+/// The format to read a file in:
+///
+/// 1. one whose [`FileFormat::extensions`] include the file's extension,
+///    if it can read the file;
+/// 2. otherwise the best fit ([`FileFormat::misfit`]), the earliest in
+///    `formats` winning a tie;
+/// 3. otherwise the last format (the machine's text format).
+pub fn detect(
+    formats: &[&'static dyn FileFormat],
+    bytes: &[u8],
+    extension: Option<&str>,
+) -> &'static dyn FileFormat {
+    let text = *formats.last().expect("a machine has at least one format");
+    let specific = formats.iter().copied().find(|f| {
+        extension.is_some_and(|e| f.extensions().iter().any(|x| x.eq_ignore_ascii_case(e)))
+            && f.detect(bytes)
+    });
+    specific
+        .or_else(|| {
+            formats[..formats.len() - 1]
+                .iter()
+                .copied()
+                .filter_map(|f| f.misfit(bytes).map(|m| (m, f)))
+                .min_by_key(|&(m, _)| m) // min_by_key keeps the first of equals
+                .map(|(_, f)| f)
+        })
+        .unwrap_or(text)
 }
 
 /// Whether two format references are the same format. (Compared by name:

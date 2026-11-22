@@ -27,11 +27,15 @@ pub const INTERNATIONAL: usize = 1;
 /// The font licence text, for display in the About screen.
 pub const FONT_LICENSE: &str = include_str!("../../../assets/fonts/atari/OFL.txt");
 
-/// File formats, most specific first: a Turbo-BASIC XL program that only
-/// uses Atari BASIC's tokens reads as Atari BASIC. Plain ATASCII text last.
+/// File formats. The BASIC dialects share a file layout; `format::detect`
+/// picks by extension (.TUR, .BXL, .BXE) or best fit, earlier winning a
+/// tie, so a program using only Atari BASIC's keywords reads as Atari
+/// BASIC. Plain ATASCII text last.
 static FORMATS: &[&dyn FileFormat] = &[
     &basic::ATARI_BASIC_FILE,
     &basic::TURBO_BASIC_XL_FILE,
+    &basic::BASIC_XL_FILE,
+    &basic::BASIC_XE_FILE,
     &atascii::AtasciiText,
 ];
 
