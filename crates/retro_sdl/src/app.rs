@@ -1441,6 +1441,13 @@ impl App {
         self.editor.click(Pos::default(), false);
         self.editor.click(Pos { line: n, col: 0 }, true);
     }
+
+    /// Test hook: select the first `n` characters backwards, leaving the
+    /// cursor on the first (selected) character.
+    pub fn test_select_back(&mut self, n: usize) {
+        self.editor.click(Pos { line: 0, col: n }, false);
+        self.editor.click(Pos::default(), true);
+    }
 }
 
 /// The navigation key a number-pad key gives with NumLock off.

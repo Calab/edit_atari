@@ -199,6 +199,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.test_select_lines(n);
     }
+    if let Some(n) = std::env::var("RETRO_EDITOR_SELECT_BACK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        app.test_select_back(n);
+    }
 
     let mut first_frame = true;
     while app.running {

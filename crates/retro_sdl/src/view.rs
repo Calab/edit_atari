@@ -145,8 +145,15 @@ impl App {
             }
         }
 
-        // Cursor: the character under it in inverse colours.
+        // Cursor: the character under it in inverse colours -- inverse of
+        // the selection's colours when it's on a selected character, so
+        // the selection still shows there.
         let cur = doc.cursor();
+        let (fg, bg) = if sel.is_some_and(|(a, b)| a <= cur && cur < b) {
+            (sel_fg, sel_bg)
+        } else {
+            (fg, bg)
+        };
         let (crow, cx) = layout.locate(doc, cur);
         if crow >= self.editor.top && crow < self.editor.top + layout.rows {
             let screen = crow - self.editor.top;
