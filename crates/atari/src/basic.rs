@@ -41,6 +41,9 @@ pub struct Dialect {
     spaced: &'static [u8],
     /// Token for a number listed in hex (`$D01F`), followed by 6 BCD bytes.
     hex_number: Option<u8>,
+    /// Token for variables 128-255, followed by one byte: the variable
+    /// number minus 128. (Variables 0-127 are tokens $80-$FF.)
+    high_variable: Option<u8>,
 }
 
 impl Dialect {
@@ -67,13 +70,16 @@ impl Dialect {
     fn hex_number(&self) -> Option<u8> {
         self.hex_number.or_else(|| self.base?.hex_number())
     }
+
+    fn high_variable(&self) -> Option<u8> {
+        self.high_variable.or_else(|| self.base?.high_variable())
+    }
 }
 
 /// Expression tokens with their own data, below the operator table.
 const NUMBER: u8 = 0x0E;
 const STRING: u8 = 0x0F;
 const FIRST_OPERATOR: u8 = 0x12;
-const END_OF_STATEMENT: u8 = 0x14;
 const END_OF_LINE: u8 = 0x16;
 /// Tokens at and above this are variables.
 const FIRST_VARIABLE: u8 = 0x80;
@@ -107,6 +113,7 @@ pub static ATARI_BASIC: Dialect = Dialect {
     ],
     spaced: &[0x17, 0x18, 0x19, 0x1A, 0x1B, 0x28, 0x29, 0x2A],
     hex_number: None,
+    high_variable: None,
 };
 
 /// Turbo-BASIC XL's `--` statement lists as a line of 30 dashes.
@@ -136,6 +143,7 @@ pub static TURBO_BASIC_XL: Dialect = Dialect {
     ],
     spaced: &[0x5A, 0x5D, 0x61, 0x62, 0x6A],
     hex_number: Some(0x0D),
+    high_variable: Some(0x00),
 };
 
 /// A tokenized BASIC file in one dialect.
@@ -281,8 +289,9 @@ fn list_line(d: &Dialect, line: &[u8], names: &[Vec<u8>]) -> Result<Vec<u8>, Str
             }
             out.extend_from_slice(text);
         } else {
-            let has_args = !matches!(body.first(), None | Some(&END_OF_STATEMENT | &END_OF_LINE));
-            if !keyword.is_empty() && has_args {
+            // LIST puts a space after every keyword, even with nothing
+            // after it: `PRINT :`, `END `.
+            if !keyword.is_empty() {
                 out.push(b' ');
             }
             list_tokens(d, body, names, &mut out)?;
@@ -323,12 +332,11 @@ fn list_tokens(
                 out.extend(format_hex(n.try_into().unwrap()).bytes());
                 i += 6;
             }
-            FIRST_VARIABLE.. => {
-                let n = (t - FIRST_VARIABLE) as usize;
-                match names.get(n) {
-                    Some(name) => out.extend_from_slice(name),
-                    None => return Err(format!("variable {n} has no name")),
-                }
+            FIRST_VARIABLE.. => variable(names, (t - FIRST_VARIABLE) as usize, out)?,
+            _ if Some(t) == d.high_variable() => {
+                let n = *body.get(i).ok_or("variable cut short")? as usize;
+                variable(names, 128 + n, out)?;
+                i += 1;
             }
             _ => {
                 let name = d
@@ -349,7 +357,17 @@ fn list_tokens(
     Ok(())
 }
 
-/// A whole number written in hex, as Turbo-BASIC XL lists `$D01F`.
+/// Variable `n`'s name.
+fn variable(names: &[Vec<u8>], n: usize, out: &mut Vec<u8>) -> Result<(), String> {
+    let name = names
+        .get(n)
+        .ok_or_else(|| format!("variable {n} has no name"))?;
+    out.extend_from_slice(name);
+    Ok(())
+}
+
+/// A whole number written in hex, as Turbo-BASIC XL lists `$D01F`, in
+/// whole bytes.
 fn format_hex(n: [u8; 6]) -> String {
     let exp100 = (n[0] & 0x7F) as i32 - 64;
     let mut v: u64 = 0;
@@ -363,11 +381,18 @@ fn format_hex(n: [u8; 6]) -> String {
             }
         }
     }
-    format!("${v:X}")
+    // Whole bytes, as Turbo-BASIC XL lists them: $0F, $02E7, $B000.
+    if v < 0x100 {
+        format!("${v:02X}")
+    } else if v < 0x10000 {
+        format!("${v:04X}")
+    } else {
+        format!("${v:06X}")
+    }
 }
 
 /// An Atari 6-byte BCD number as BASIC prints it: plain decimal from 0.01
-/// up to 9999999999, otherwise like `1.5E-05` or `1E+10`.
+/// up to 9999999999, otherwise like `1.5E-05` or `1.0E+10`.
 pub fn format_number(n: [u8; 6]) -> String {
     if n[0] & 0x7F == 0 {
         return "0".into();
@@ -412,11 +437,10 @@ pub fn format_number(n: [u8; 6]) -> String {
             }
         }
     } else {
+        // At least one decimal: 1.0E-03, 1.5E-05.
         s.push_str(&digits[..1]);
-        if digits.len() > 1 {
-            s.push('.');
-            s.push_str(&digits[1..]);
-        }
+        s.push('.');
+        s.push_str(if digits.len() > 1 { &digits[1..] } else { "0" });
         s.push_str(&format!(
             "E{}{:02}",
             if exp < 0 { '-' } else { '+' },
@@ -430,6 +454,9 @@ pub fn format_number(n: [u8; 6]) -> String {
 mod tests {
     use super::*;
 
+    /// `:` between statements.
+    const END_OF_STATEMENT: u8 = 0x14;
+
     #[test]
     fn numbers() {
         let f = |b: [u8; 6]| format_number(b);
@@ -441,19 +468,21 @@ mod tests {
         assert_eq!(f([0xC0, 0x05, 0x25, 0, 0, 0]), "-5.25");
         assert_eq!(f([0x3F, 0x50, 0, 0, 0, 0]), "0.5");
         assert_eq!(f([0x3F, 0x01, 0, 0, 0, 0]), "0.01");
-        assert_eq!(f([0x3E, 0x10, 0, 0, 0, 0]), "1E-03");
+        assert_eq!(f([0x3E, 0x10, 0, 0, 0, 0]), "1.0E-03");
         assert_eq!(f([0x3D, 0x15, 0, 0, 0, 0]), "1.5E-05");
         assert_eq!(f([0x44, 0x99, 0x99, 0x99, 0x99, 0x99]), "9999999999");
-        assert_eq!(f([0x45, 0x01, 0, 0, 0, 0]), "1E+10");
+        assert_eq!(f([0x45, 0x01, 0, 0, 0, 0]), "1.0E+10");
         assert_eq!(f([0x40, 0x03, 0x14, 0x15, 0x92, 0x65]), "3.14159265");
     }
 
     #[test]
     fn hex_numbers() {
-        assert_eq!(format_hex([0x40, 0x12, 0, 0, 0, 0]), "$C");
-        assert_eq!(format_hex([0x41, 0x07, 0x43, 0, 0, 0]), "$2E7");
+        assert_eq!(format_hex([0x40, 0x12, 0, 0, 0, 0]), "$0C");
+        assert_eq!(format_hex([0x40, 0x15, 0, 0, 0, 0]), "$0F");
+        assert_eq!(format_hex([0x41, 0x02, 0x55, 0, 0, 0]), "$FF");
+        assert_eq!(format_hex([0x41, 0x07, 0x43, 0, 0, 0]), "$02E7");
         assert_eq!(format_hex([0x42, 0x04, 0x50, 0x56, 0, 0]), "$B000");
-        assert_eq!(format_hex([0, 0, 0, 0, 0, 0]), "$0");
+        assert_eq!(format_hex([0, 0, 0, 0, 0, 0]), "$00");
     }
 
     #[test]
@@ -553,9 +582,24 @@ mod tests {
                 "10 PRINT \"HI\";A$:REM COMMENT",
                 "20 FOR I=1 TO 10",
                 "30 B(I)=PEEK(53279)",
-                "40 END",
+                "40 END ",
             ]
         );
+    }
+
+    #[test]
+    fn turbo_basic_variables_past_127() {
+        let names: Vec<String> = (0..130).map(|i| format!("V{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        // 10 V129=V1 : variable 129 is $00 $01, variable 1 is $81.
+        let line = [10, 0, 9, 9, 0x36, 0x00, 0x01, 0x2D, 0x81, END_OF_LINE];
+        let mut line = line.to_vec();
+        line[2] = line.len() as u8;
+        line[3] = line.len() as u8;
+        let f = program(&names, &[&line]);
+        assert!(!ATARI_BASIC_FILE.detect(&f));
+        let d = TURBO_BASIC_XL_FILE.decode(&f).unwrap();
+        assert_eq!(d.lines[0], b"10 V129=V1");
     }
 
     #[test]
