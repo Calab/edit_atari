@@ -43,10 +43,12 @@ fn is_listing(p: &std::path::Path) -> bool {
 fn check_listings(dir: &str, format: &dyn FileFormat) {
     for lst in samples(dir).into_iter().filter(|p| is_listing(p)) {
         let stem = lst.file_stem().unwrap().to_string_lossy().to_lowercase();
-        let Some(prog) = programs(dir)
-            .into_iter()
-            .find(|p| p.file_stem().unwrap().to_string_lossy().to_lowercase() == stem)
-        else {
+        // The program with the same name that this format reads (there may
+        // also be a plain-text version, such as SYSEQU.ASM).
+        let Some(prog) = programs(dir).into_iter().find(|p| {
+            p.file_stem().unwrap().to_string_lossy().to_lowercase() == stem
+                && format.detect(&std::fs::read(p).unwrap())
+        }) else {
             panic!("{}: no program with the same name", lst.display());
         };
         let d = format.decode(&std::fs::read(&prog).unwrap()).unwrap();
@@ -151,4 +153,29 @@ fn dialect_detected_from_content() {
             assert_eq!(got, want, "{}", p.display());
         }
     }
+}
+
+/// MAC/65 sources (`.M65`, `.LIB` and the Toolkit's `.DEM`; not the
+/// plain-text `.ASM`) read as MAC/65.
+#[test]
+fn mac65_sources_list() {
+    use retro_core::{Machine, format};
+    let formats = atari::Atari::default().formats();
+    for p in programs("MAC-65") {
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("asm") {
+            continue;
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        if let Err(e) = atari::mac65::Mac65.decode(&bytes) {
+            panic!("{}: {e}", p.display());
+        }
+        assert_eq!(
+            format::detect(formats, &bytes, None).name(),
+            "MAC/65",
+            "{}",
+            p.display()
+        );
+    }
+    check_listings("MAC-65", &atari::mac65::Mac65);
 }
