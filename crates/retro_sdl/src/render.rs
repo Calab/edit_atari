@@ -12,6 +12,8 @@ pub struct Palette {
     pub background: (u8, u8, u8),
     pub foreground: (u8, u8, u8),
     pub border: (u8, u8, u8),
+    /// Text past the line-length warning column.
+    pub warning: (u8, u8, u8),
 }
 
 pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {

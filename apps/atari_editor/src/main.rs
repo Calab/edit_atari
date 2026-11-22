@@ -67,6 +67,7 @@ fn main() -> ExitCode {
             background: (0x1A, 0x55, 0xA8),
             foreground: (0x8C, 0xC4, 0xFF),
             border: (0x00, 0x00, 0x00),
+            warning: (0xFF, 0xA8, 0x40),
         },
         help: HELP,
         about: about(),

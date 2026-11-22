@@ -1,0 +1,47 @@
+{
+    // Press F5 to run the selected configuration (pick one in the
+    // Run and Debug view). Needs the CodeLLDB extension.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Atari Editor: sample file",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "-p", "atari_editor", "--bin=atari_editor"],
+                "filter": { "name": "atari_editor", "kind": "bin" }
+            },
+            "args": ["${workspaceFolder}/samples/SAMPLE.LST"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Atari Editor: choose a file",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "-p", "atari_editor", "--bin=atari_editor"],
+                "filter": { "name": "atari_editor", "kind": "bin" }
+            },
+            "args": ["${input:fileToEdit}"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug tests: atari crate",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--no-run", "-p", "atari", "--lib"],
+                "filter": { "name": "atari", "kind": "lib" }
+            },
+            "cwd": "${workspaceFolder}"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "fileToEdit",
+            "type": "promptString",
+            "description": "File to open (a new file is created when you save)",
+            "default": "${workspaceFolder}/samples/SAMPLE.LST"
+        }
+    ]
+}

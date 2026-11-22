@@ -61,6 +61,8 @@ struct App {
     /// The last key press was handled as a command, so the text it would
     /// type (e.g. the `` ` `` of the inverse key) must be ignored.
     swallow_text: bool,
+    /// A number being typed into the status bar (F9), if any.
+    prompt: Option<String>,
 }
 
 /// Open `file` (if given) and run the editor until the user quits.
@@ -79,6 +81,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         quit_armed: false,
         overlay: Overlay::None,
         swallow_text: false,
+        prompt: None,
         overlay_top: 0,
         running: true,
     };
@@ -196,7 +199,13 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 Event::TextInput { text, .. } => {
                     let held = keyboard_util.mod_state();
                     let swallow = std::mem::take(&mut app.swallow_text);
-                    if app.overlay == Overlay::None && !app.ctrl_held(held) && !swallow {
+                    if let Some(input) = &mut app.prompt {
+                        for c in text.chars().filter(char::is_ascii_digit) {
+                            if input.len() < 4 {
+                                input.push(c);
+                            }
+                        }
+                    } else if app.overlay == Overlay::None && !app.ctrl_held(held) && !swallow {
                         for c in text.chars() {
                             app.machine_key(KeyInput::plain(Key::Char(c)), &layout);
                         }
@@ -357,6 +366,28 @@ impl App {
         let editor_ctrl = m.intersects(Mod::LCTRLMOD) && !atari_ctrl;
         let shift = m.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
 
+        if let Some(input) = &mut self.prompt {
+            match k {
+                Keycode::RETURN | Keycode::KP_ENTER => {
+                    let n = input.parse().unwrap_or(0);
+                    self.prompt = None;
+                    self.config.line_warning = n;
+                    self.message = Some(if n == 0 {
+                        "Line length warning off".into()
+                    } else {
+                        format!("Line length warning at {n} characters")
+                    });
+                    self.save_config();
+                }
+                Keycode::ESCAPE => self.prompt = None,
+                Keycode::BACKSPACE => {
+                    input.pop();
+                }
+                _ => {}
+            }
+            return false;
+        }
+
         if self.overlay != Overlay::None {
             match k {
                 Keycode::ESCAPE | Keycode::F1 | Keycode::F10 | Keycode::RETURN => {
@@ -428,6 +459,13 @@ impl App {
                     self.config.control_key.label()
                 ));
                 self.save_config();
+                return false;
+            }
+            Keycode::F9 => {
+                self.prompt = Some(match self.config.line_warning {
+                    0 => String::new(),
+                    n => n.to_string(),
+                });
                 return false;
             }
             Keycode::F10 => {
@@ -568,6 +606,11 @@ impl App {
     fn draw_text(&self, grid: &mut Grid, layout: &Layout, fg: Color, bg: Color) {
         let doc = &self.editor.doc;
         let w = layout.text_cols;
+        let warn_col = match self.config.line_warning {
+            0 => usize::MAX,
+            n => n,
+        };
+        let warn = rgb(self.spec.palette.warning);
         let mut row = 0usize; // absolute screen row of the current line's first row
         for line in doc.lines() {
             let rows = layout.rows_for_len(line.len());
@@ -583,7 +626,11 @@ impl App {
                     }
                     let start = (r * w).min(line.len());
                     let end = ((r + 1) * w).min(line.len());
-                    grid.codes(layout.left_margin, screen, &line[start..end], fg);
+                    // Characters past the warning column use the warning colour.
+                    let split = warn_col.clamp(start, end);
+                    grid.codes(layout.left_margin, screen, &line[start..split], fg);
+                    let x = layout.left_margin + split - start;
+                    grid.codes(x, screen, &line[split..end], warn);
                 }
             }
             row += rows;
@@ -608,6 +655,13 @@ impl App {
     }
 
     fn status_line(&self, width: usize) -> Vec<u8> {
+        if let Some(input) = &self.prompt {
+            let mut codes = self.ascii(&format!(
+                " Line length warning (0=off): {input}_   Enter=OK  Esc=cancel"
+            ));
+            codes.truncate(width);
+            return codes;
+        }
         let doc = &self.editor.doc;
         let cur = doc.cursor();
         let left = match &self.message {
@@ -619,6 +673,10 @@ impl App {
             ),
         };
         let mut flags = vec![format!("L{} C{}", cur.line + 1, cur.col + 1)];
+        let len = doc.line(cur.line).len();
+        if self.config.line_warning > 0 && len > self.config.line_warning {
+            flags.push(format!("LEN {len}!"));
+        }
         flags.push(if doc.overwrite { "OVR" } else { "INS" }.into());
         flags.extend(
             self.spec
@@ -650,6 +708,10 @@ impl App {
 
     fn help_text(&self) -> String {
         let ctrl = self.config.control_key.label();
+        let warn = match self.config.line_warning {
+            0 => "off".to_string(),
+            n => n.to_string(),
+        };
         let mut s = format!(
             "{} - KEYS  (Esc or F1 closes)\n\
              \n\
@@ -661,6 +723,7 @@ impl App {
              ` or F6       Inverse video on/off (Atari key)\n\
              F7            Key click on/off\n\
              F8            CONTROL key: {ctrl}\n\
+             F9            Line length warning: {warn}\n\
              F10           About and licences\n\
              \n\
              Insert        Insert/overwrite mode\n\

@@ -32,6 +32,9 @@ pub struct Config {
     pub scale: u32,
     pub key_click: bool,
     pub click_volume: f32,
+    /// Characters past this column are drawn in the warning colour;
+    /// 0 turns the warning off.
+    pub line_warning: usize,
 }
 
 impl Default for Config {
@@ -42,12 +45,16 @@ impl Default for Config {
             scale: 3,
             key_click: true,
             click_volume: 0.25,
+            line_warning: DEFAULT_LINE_WARNING,
         }
     }
 }
 
 pub const MIN_SCALE: u32 = 1;
 pub const MAX_SCALE: u32 = 8;
+/// The Atari screen editor's logical line: 3 rows of 38 characters.
+pub const DEFAULT_LINE_WARNING: usize = 114;
+pub const MAX_LINE_WARNING: usize = 9999;
 
 impl Config {
     pub fn path(app_id: &str) -> Option<PathBuf> {
@@ -98,6 +105,11 @@ impl Config {
                     }
                 }
                 "key_click" => c.key_click = v != "off",
+                "line_warning" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        c.line_warning = n.min(MAX_LINE_WARNING);
+                    }
+                }
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -118,7 +130,9 @@ impl Config {
              wrap = {}\n\
              scale = {}\n\
              key_click = {}\n\
-             click_volume = {}\n",
+             click_volume = {}\n\
+             # line_warning: highlight characters past this column (0 = off)\n\
+             line_warning = {}\n",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -130,6 +144,7 @@ impl Config {
             self.scale,
             if self.key_click { "on" } else { "off" },
             self.click_volume,
+            self.line_warning,
         )
     }
 
@@ -154,6 +169,7 @@ mod tests {
             scale: 2,
             key_click: false,
             click_volume: 0.5,
+            line_warning: 0,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }

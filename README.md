@@ -25,6 +25,9 @@ character set is built in.
     7, 15, 23, 31 and 39 of each row). Shift+Tab sets a stop at the cursor
     and CONTROL+Tab clears one; with no stops left in the logical line, Tab
     moves to the start of the next line.
+- Line length warning: characters past column 114 (the Atari screen
+  editor's 3 x 38 logical line) are shown in orange, and the status bar
+  shows the line's length. Press F9 to change the limit (0 turns it off).
 - 40-column Atari layout with the 2-column margin, or wrapping at the window
   width (F4).
 - The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it
@@ -55,6 +58,13 @@ from source and linked in, so the result doesn't need SDL installed.
 On Linux, building SDL needs the X11/Wayland/audio development packages; see
 `.github/workflows/build.yml` for the list. GitHub Actions builds Linux,
 Windows and macOS versions on every push.
+
+### Developing in VS Code
+
+Open the folder in VS Code and install the recommended extensions when
+prompted (rust-analyzer, CodeLLDB, Even Better TOML). Then press **F5** to
+build and run the editor on `samples/SAMPLE.LST`, or pick "Atari Editor:
+choose a file" in the Run and Debug view.
 
 ## Project layout
 
