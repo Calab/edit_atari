@@ -18,6 +18,8 @@ pub enum After {
     New,
     Open,
     Import,
+    /// Open the file that was dropped on the window (`App::dropped`).
+    OpenDropped,
     Quit,
 }
 

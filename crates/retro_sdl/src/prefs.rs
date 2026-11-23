@@ -9,6 +9,7 @@ use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas};
 use sdl2::video::Window;
 
+use crate::config::ControlKey;
 use crate::menu::THEME;
 use crate::ui_font::UiFont;
 
@@ -212,7 +213,7 @@ impl Prefs {
                         Field::ControlKey,
                         cx,
                         y,
-                        &["RIGHT-CTRL", "LEFT-ALT"],
+                        &[ControlKey::RightCtrl.label(), ControlKey::LeftAlt.label()],
                         usize::from(v.left_alt),
                     );
                 }
@@ -415,7 +416,10 @@ fn row_width(font: &mut UiFont, p: i32, v: &View, row: &Row) -> i32 {
         }
         Row::Charset => choice(font, v.charsets),
         Row::Click => checkbox(font, "On"),
-        Row::ControlKey => choice(font, &["RIGHT-CTRL", "LEFT-ALT"]),
+        Row::ControlKey => choice(
+            font,
+            &[ControlKey::RightCtrl.label(), ControlKey::LeftAlt.label()],
+        ),
         Row::Warn => checkbox(font, "On") + p * 6 + font.measure("after column") + spinner(font, 4),
         Row::Attract => {
             checkbox(font, "On")

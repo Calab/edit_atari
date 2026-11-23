@@ -238,6 +238,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.menu.context = Some((x, y));
     }
+    // Files to drop, separated as in PATH (':' or ';').
+    if let Some(paths) = std::env::var_os("RETRO_EDITOR_DROP") {
+        app.drop_files(std::env::split_paths(&paths).collect());
+    }
     if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_PDF") {
         app.test_save_pdf(path.into());
     }
@@ -288,6 +292,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         app.test_select_back(n);
     }
 
+    // Files dropped on the window, collected until the drop is complete
+    // (several files dropped at once arrive one event at a time).
+    let mut dropped: Vec<PathBuf> = Vec::new();
+    let mut dropping = false;
     let mut first_frame = true;
     while app.running {
         // Draw the first frame straight away; after that, sleep until
@@ -336,6 +344,11 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             let px = |v: i32| (v as f32 * ratio) as i32;
             match event {
                 Event::Quit { .. } => app.command(menu::Command::Quit, &ctx),
+                // Files dragged onto the window, or (on macOS) opened from
+                // the Finder with this app.
+                Event::DropBegin { .. } => dropping = true,
+                Event::DropFile { filename, .. } => dropped.push(PathBuf::from(filename)),
+                Event::DropComplete { .. } => dropping = false,
                 Event::Window {
                     win_event: WindowEvent::SizeChanged(..),
                     ..
@@ -366,10 +379,15 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     y,
                     ..
                 } => {
-                    let shift = keyboard_util.mod_state().intersects(
-                        sdl2::keyboard::Mod::LSHIFTMOD | sdl2::keyboard::Mod::RSHIFTMOD,
-                    );
-                    app.mouse_down(px(x), px(y), shift, &frame);
+                    use sdl2::keyboard::Mod;
+                    let mods = keyboard_util.mod_state();
+                    let shift = mods.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
+                    // Control-click is the Mac's right-click.
+                    if cfg!(target_os = "macos") && mods.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) {
+                        app.mouse_right(px(x), px(y), &frame);
+                    } else {
+                        app.mouse_down(px(x), px(y), shift, &frame);
+                    }
                 }
                 Event::MouseButtonDown {
                     mouse_btn: MouseButton::Right,
@@ -389,6 +407,11 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 Event::MouseWheel { y, .. } => app.wheel(y, &frame),
                 _ => {}
             }
+        }
+        // A whole drop has arrived (or a file came on its own, as the
+        // Finder may send them).
+        if !dropping && !dropped.is_empty() {
+            app.drop_files(std::mem::take(&mut dropped));
         }
 
         app.tick();

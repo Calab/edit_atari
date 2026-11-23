@@ -52,6 +52,24 @@ pub struct Menu {
     pub items: Vec<Item>,
 }
 
+/// A shortcut as this system shows it: "Ctrl+Shift+S" on Windows and
+/// Linux; on macOS, with the Command key, "⇧⌘S" (and Redo as ⇧⌘Z).
+pub fn shortcut_text(s: &str) -> String {
+    if !cfg!(target_os = "macos") {
+        return s.to_string();
+    }
+    let Some(rest) = s.strip_prefix("Ctrl+") else {
+        return s.to_string();
+    };
+    if rest == "Y" {
+        return "\u{21E7}\u{2318}Z".into();
+    }
+    match rest.strip_prefix("Shift+") {
+        Some(key) => format!("\u{21E7}\u{2318}{key}"),
+        None => format!("\u{2318}{rest}"),
+    }
+}
+
 const fn item(label: &'static str, shortcut: &'static str, c: Command) -> Item {
     Item {
         label,
@@ -102,7 +120,15 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
                 item("Zoom &Out", "Ctrl+-", ZoomOut),
                 SEP,
                 item("&Key Click", "F7", ToggleClick),
-                item("LEFT-&ALT as CONTROL Key", "F8", ToggleControlKey),
+                item(
+                    if cfg!(target_os = "macos") {
+                        "LEFT-&OPTION as CONTROL Key"
+                    } else {
+                        "LEFT-&ALT as CONTROL Key"
+                    },
+                    "F8",
+                    ToggleControlKey,
+                ),
                 SEP,
                 item("&Preferences...", "Ctrl+,", Preferences),
             ],
@@ -331,7 +357,7 @@ fn draw_dropdown(
     let short_w = menu
         .items
         .iter()
-        .map(|it| font.measure(it.shortcut))
+        .map(|it| font.measure(&shortcut_text(it.shortcut)))
         .max()
         .unwrap_or(0);
     let check_w = pad * 2;
@@ -386,8 +412,9 @@ fn draw_dropdown(
             }
         }
         draw_label(canvas, font, left + pad / 2 + check_w, ty, it.label, color);
-        let sw = font.measure(it.shortcut);
-        font.draw(canvas, left + w - pad - sw, ty, it.shortcut, color);
+        let shortcut = shortcut_text(it.shortcut);
+        let sw = font.measure(&shortcut);
+        font.draw(canvas, left + w - pad - sw, ty, &shortcut, color);
         rects.push(r);
         y += row_h;
     }

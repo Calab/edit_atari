@@ -139,6 +139,8 @@ pub struct App {
     /// The name an imported document, not yet saved, goes by: the PC
     /// file's name with the text format's extension.
     import_name: Option<String>,
+    /// A file dropped on the window, waiting for "Save changes?".
+    dropped: Option<PathBuf>,
     /// Lines in capitals, waiting for an answer in the Import dialog.
     pending_case: Option<Vec<Vec<u8>>>,
     /// The format the document was read in (see `retro_core::format`).
@@ -209,6 +211,7 @@ impl App {
             path: None,
             import_name: None,
             pending_case: None,
+            dropped: None,
             format,
             pending_save: None,
             message: None,
@@ -419,7 +422,12 @@ impl App {
                 };
                 let doc = Document::from_lines(d.lines, d.final_eol);
                 self.message = None;
-                if forced.is_none() && self.spec.machine.looks_like_pc_text(&bytes) {
+                // Only for a file read as plain text: a tokenized program
+                // has no $9B line ends and may well hold CR or LF bytes.
+                if forced.is_none()
+                    && format::same(fmt, text)
+                    && self.spec.machine.looks_like_pc_text(&bytes)
+                {
                     self.message = Some("PC text? Use File > Import".into());
                 }
                 if !fmt.can_encode() {
@@ -902,6 +910,12 @@ impl App {
             }
             After::Open => self.start_file_job(FileJobKind::Open),
             After::Import => self.start_file_job(FileJobKind::Import),
+            After::OpenDropped => {
+                if let Some(path) = self.dropped.take() {
+                    self.note_folder(&path);
+                    self.open_path(&path);
+                }
+            }
             After::Quit => self.running = false,
         }
     }
@@ -1029,6 +1043,44 @@ impl App {
     }
 
     /// Test hook: show the Reopen As chooser.
+    /// Files were dropped on the window (or opened from the macOS
+    /// Finder): the first opens here, as File > Open would; each other one
+    /// in a new window of its own.
+    pub fn drop_files(&mut self, paths: Vec<PathBuf>) {
+        let mut files = paths.into_iter().filter(|p| !p.is_dir());
+        let Some(first) = files.next() else {
+            self.message = Some("Folders can't be opened: drop files".into());
+            return;
+        };
+        let mut failed = 0;
+        for path in files {
+            if open_new_window(&path).is_err() {
+                failed += 1;
+            }
+        }
+        self.drop_file(first);
+        if failed > 0 {
+            self.message = Some(format!("Couldn't open {failed} more window(s)"));
+        }
+    }
+
+    /// Open a dropped file here, unless a dialog is waiting for an answer.
+    fn drop_file(&mut self, path: PathBuf) {
+        if self.dialog.is_some() || self.file_job.is_some() {
+            // Not lost: it opens in a window of its own instead.
+            let _ = open_new_window(&path);
+            return;
+        }
+        self.close_menu();
+        self.overlay = Overlay::None;
+        self.print = None;
+        if self.prefs.is_some() {
+            self.close_prefs();
+        }
+        self.dropped = Some(path);
+        self.guard(After::OpenDropped);
+    }
+
     pub fn test_import(&mut self, path: PathBuf) {
         self.import_path(&path);
     }
@@ -1750,6 +1802,8 @@ impl App {
 
     fn atari_ctrl_mod(&self) -> Mod {
         match self.config.control_key {
+            // The Mac's control key: either one (laptops only have a left).
+            ControlKey::RightCtrl if cfg!(target_os = "macos") => Mod::LCTRLMOD | Mod::RCTRLMOD,
             ControlKey::RightCtrl => Mod::RCTRLMOD,
             ControlKey::LeftAlt => Mod::LALTMOD,
         }
@@ -1772,7 +1826,7 @@ impl App {
         if self.print.is_some() {
             return false;
         }
-        let ctrl_held = held.intersects(Mod::LCTRLMOD | self.atari_ctrl_mod());
+        let ctrl_held = held.intersects(shortcut_mod() | self.atari_ctrl_mod());
         let mut typed = false;
         if self.overlay == Overlay::None && !ctrl_held {
             for c in text.chars() {
@@ -1815,7 +1869,7 @@ impl App {
             _ => (k, m),
         };
         let atari_ctrl = m.intersects(self.atari_ctrl_mod());
-        let editor_ctrl = m.intersects(Mod::LCTRLMOD) && !atari_ctrl;
+        let editor_ctrl = m.intersects(shortcut_mod()) && !atari_ctrl;
         let shift = m.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
         let alt = m.intersects(Mod::LALTMOD | Mod::RALTMOD) && !atari_ctrl;
         let layout = &ctx.frame.layout;
@@ -1909,6 +1963,20 @@ impl App {
                         EditAction::DocStart
                     } else {
                         EditAction::DocEnd
+                    };
+                    self.editor
+                        .apply(a, layout, self.spec.machine.as_ref(), shift);
+                    None
+                }
+                // The Mac's ⌘-arrows: start and end of the line or document.
+                Keycode::UP | Keycode::DOWN | Keycode::LEFT | Keycode::RIGHT
+                    if cfg!(target_os = "macos") =>
+                {
+                    let a = match k {
+                        Keycode::UP => EditAction::DocStart,
+                        Keycode::DOWN => EditAction::DocEnd,
+                        Keycode::LEFT => EditAction::LineStart,
+                        _ => EditAction::LineEnd,
                     };
                     self.editor
                         .apply(a, layout, self.spec.machine.as_ref(), shift);
@@ -2156,6 +2224,16 @@ fn numpad_navigation(k: Keycode) -> Option<Keycode> {
 
 /// Write to a temporary file next to `path`, then rename over it, so a
 /// failed write never leaves a half-written file.
+/// The modifier for the editor's shortcuts: Command on macOS, left Ctrl
+/// elsewhere (right Ctrl is the Atari CONTROL key there by default).
+fn shortcut_mod() -> Mod {
+    if cfg!(target_os = "macos") {
+        Mod::LGUIMOD | Mod::RGUIMOD
+    } else {
+        Mod::LCTRLMOD
+    }
+}
+
 /// A message as a sentence: capital first letter, full stop at the end.
 fn sentence(s: &str) -> String {
     let mut c = s.chars();
@@ -2167,6 +2245,26 @@ fn sentence(s: &str) -> String {
         out.push('.');
     }
     out
+}
+
+/// Start another copy of this program on a file, in a window of its own.
+fn open_new_window(path: &Path) -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(path);
+    // The test hooks are for this window only (a dropped-files hook would
+    // otherwise open windows without end).
+    for (k, _) in std::env::vars_os() {
+        if k.to_string_lossy().starts_with("RETRO_EDITOR_") {
+            cmd.env_remove(k);
+        }
+    }
+    let mut child = cmd.spawn()?;
+    // Collect it when it exits.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Open a file in the system's viewer for its type, without waiting.

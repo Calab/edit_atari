@@ -20,6 +20,51 @@
     <string>VERSION</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <!-- Finder's Open With: the Atari file types, and any other file (Logo
+         files often have no extension). "Alternate": never the default app
+         unless the user chooses it. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Atari file</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>bas</string>
+                <string>tur</string>
+                <string>atb</string>
+                <string>axb</string>
+                <string>bxl</string>
+                <string>bxe</string>
+                <string>bap</string>
+                <string>amb</string>
+                <string>fb</string>
+                <string>m65</string>
+                <string>lst</string>
+                <string>asm</string>
+                <string>lgo</string>
+                <string>pil</string>
+                <string>act</string>
+                <string>txt</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Any file</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

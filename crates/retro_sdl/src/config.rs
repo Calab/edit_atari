@@ -10,6 +10,10 @@ use retro_core::WrapMode;
 use retro_core::print::Paper;
 
 /// Which PC key acts as the machine's CONTROL key.
+///
+/// On macOS the shortcuts use the Command key, so `RightCtrl` there means
+/// the Mac's own control key (either one: laptops only have a left one),
+/// and `LeftAlt` the left Option key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKey {
     RightCtrl,
@@ -18,9 +22,11 @@ pub enum ControlKey {
 
 impl ControlKey {
     pub fn label(self) -> &'static str {
-        match self {
-            ControlKey::RightCtrl => "RIGHT-CTRL",
-            ControlKey::LeftAlt => "LEFT-ALT",
+        match (self, cfg!(target_os = "macos")) {
+            (ControlKey::RightCtrl, false) => "RIGHT-CTRL",
+            (ControlKey::LeftAlt, false) => "LEFT-ALT",
+            (ControlKey::RightCtrl, true) => "CONTROL",
+            (ControlKey::LeftAlt, true) => "LEFT-OPTION",
         }
     }
 }

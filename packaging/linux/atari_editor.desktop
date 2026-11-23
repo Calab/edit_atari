@@ -7,3 +7,4 @@ Icon=atari_editor
 Terminal=false
 Categories=Utility;TextEditor;
 StartupWMClass=atari_editor
+MimeType=text/plain;

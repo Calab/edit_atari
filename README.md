@@ -15,7 +15,9 @@ character set is built in.
 - Shows all 256 ATASCII characters, including graphics and inverse video.
 - Atari keyboard behaviour on a PC keyboard:
   - **RIGHT-CTRL** acts as the Atari CONTROL key (switchable to LEFT-ALT with
-    F8), so left Ctrl stays free for editor commands.
+    F8), so left Ctrl stays free for editor commands. On a Mac, where the
+    commands use ⌘, the **control** key is the Atari CONTROL key
+    (switchable to left Option).
   - **Esc** before a key inserts that key's character instead of performing
     its action, as on the Atari: Esc then cursor-up inserts the up-arrow
     character.
@@ -45,8 +47,13 @@ character set is built in.
   programs tokenized (see [File types](#file-types)).
 
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
-  S, P, Z, Y, X, C, V, A), underlined hot keys (Alt+F then Q quits), a
-  right-click menu, and the system's own Open and Save dialogs.
+  S, P, Z, Y, X, C, V, A; on a Mac ⌘N, ⌘O, ⌘S and so on, with ⇧⌘Z for
+  Redo and ⌘-arrows for the start and end of a line or the file),
+  underlined hot keys (Alt+F then Q quits), a right-click menu
+  (Control-click on a Mac), and the system's own Open and Save dialogs.
+- Drop a file on the window to open it. Drop several and the first opens
+  in that window, each of the others in a new window of its own. On a Mac,
+  Finder's *Open With* offers Atari Editor for any file.
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
   zoom, text and background colours, character set, key click, CONTROL
   key, line length warning, attract mode, default folder (last used or a

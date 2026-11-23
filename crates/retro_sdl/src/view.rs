@@ -323,25 +323,46 @@ impl App {
 
     fn help_text(&self) -> String {
         let ctrl = self.config.control_key.label();
-        let mut s = format!(
-            "{} - KEYBOARD\n\
-             \n\
-             Menus  Alt+F / Alt+E / Alt+O / Alt+H, or F10\n\
+        // The editor's own shortcuts: Command on macOS, Ctrl elsewhere.
+        let shortcuts = if cfg!(target_os = "macos") {
+            "Menus  Option+F / E / O / H, or F10\n\
+             \u{2318}N / O / S  New / Open / Save\n\
+             \u{21E7}\u{2318}S  Save As\n\
+             \u{2318}P  Print\n\
+             \u{2318}Z / \u{21E7}\u{2318}Z  Undo / Redo\n\
+             \u{2318}X / C / V  Cut / Copy / Paste\n\
+             \u{2318}A  Select all\n\
+             Shift+arrows  Select text (or drag with the mouse)\n\
+             \u{2318}\u{2191} / \u{2318}\u{2193}  Start / end of file\n\
+             \u{2318}\u{2190} / \u{2318}\u{2192}  Start / end of line\n\
+             \u{2318}+ / -  Zoom in / out\n\
+             Control-click  Right-click menu\n\
+             \u{2318},  Preferences\n"
+        } else {
+            "Menus  Alt+F / Alt+E / Alt+O / Alt+H, or F10\n\
              Ctrl+N / O / S  New / Open / Save\n\
              Ctrl+Shift+S  Save As\n\
+             Ctrl+P  Print\n\
              Ctrl+Z / Ctrl+Y  Undo / Redo\n\
              Ctrl+X / C / V  Cut / Copy / Paste\n\
              Ctrl+A  Select all\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
              Ctrl+Home / End  Start / end of file\n\
              Ctrl+ + / -  Zoom in / out\n\
+             Ctrl+,  Preferences\n"
+        };
+        let mut s = format!(
+            "{} - KEYBOARD\n\
+             \n\
+             {shortcuts}\
+             Drop files on the window to open them (one per window).\n\
+             \n\
              F4  40 columns / window width\n\
              `  Inverse video on/off (the Atari key; left of 1)\n\
              F6  Standard / international character set\n\
              F7  Key click on/off\n\
              F8  CONTROL key ({ctrl})\n\
              F9  Line length warning (Preferences)\n\
-             Ctrl+,  Preferences\n\
              \n\
              Insert  Insert / overwrite mode\n\
              Shift+Insert  Insert line\n\
