@@ -12,7 +12,7 @@ members = [
 authors = ["Steve Norton", "Claude AI"]
 edition = "2024"
 license = "GPL-3.0-or-later"
-version = "1.0.0"
+version = "1.1.0"
 
 [profile.release]
 opt-level = 3
