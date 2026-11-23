@@ -55,6 +55,8 @@ struct PendingSave {
     then: Option<After>,
     /// The user agreed to save lines as ERROR- lines.
     confirmed: bool,
+    /// The user agreed to save over a file another program changed.
+    overwrite: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +99,12 @@ impl ExportKind {
     }
 }
 use crate::config::{self, Config, ControlKey, DirMode};
+use crate::find_page::{self, FindPage};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 use crate::prefs::{self, Field, Op, Prefs};
 use crate::print_page::{self, PrintPage};
 use retro_core::print::{Paper, PrintSettings};
+use retro_core::search;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
@@ -139,8 +143,30 @@ pub struct App {
     /// The name an imported document, not yet saved, goes by: the PC
     /// file's name with the text format's extension.
     import_name: Option<String>,
-    /// A file dropped on the window, waiting for "Save changes?".
+    /// A file dropped on the window (or chosen from the recent files),
+    /// waiting for "Save changes?".
     dropped: Option<PathBuf>,
+    /// The settings as loaded, so only this window's changes are saved
+    /// (other windows may have saved theirs meanwhile).
+    config_initial: Config,
+    /// Files this window opened or saved, most recent first, for the
+    /// recent files list.
+    opened: Vec<String>,
+    /// The Options menu's character set item, for rebuilding the menus.
+    alt_charset: Option<&'static str>,
+    /// The file's modification time and size when last read or written,
+    /// to notice another program changing it.
+    disk_stamp: Option<(std::time::SystemTime, u64)>,
+    /// The Find / Go to Line panel, when open, and what it holds.
+    pub find: Option<FindPage>,
+    /// The Find and Replace fields: one-line Atari text, and how far each
+    /// is scrolled sideways.
+    pub find_field: Editor,
+    pub replace_field: Editor,
+    pub field_scroll: [usize; 2],
+    match_case: bool,
+    match_inverse: bool,
+    line_text: String,
     /// Lines in capitals, waiting for an answer in the Import dialog.
     pending_case: Option<Vec<Vec<u8>>>,
     /// The format the document was read in (see `retro_core::format`).
@@ -204,6 +230,13 @@ impl App {
             config.wrap,
             spec.machine.default_tab_stops(),
         );
+        let menus = menu::menus(alt_charset, &config.recent);
+        let config_initial = config.clone();
+        let field = Editor::new(
+            Document::new(),
+            WrapMode::Window,
+            spec.machine.default_tab_stops(),
+        );
         Self {
             spec,
             config,
@@ -212,6 +245,17 @@ impl App {
             import_name: None,
             pending_case: None,
             dropped: None,
+            config_initial,
+            opened: Vec::new(),
+            alt_charset,
+            disk_stamp: None,
+            find: None,
+            find_field: field.clone(),
+            replace_field: field,
+            field_scroll: [0, 0],
+            match_case: false,
+            match_inverse: false,
+            line_text: String::new(),
             format,
             pending_save: None,
             message: None,
@@ -220,7 +264,7 @@ impl App {
             overlay_top: 0,
             prefs: None,
             print: None,
-            menus: menu::menus(alt_charset),
+            menus,
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
             geom: Geometry::default(),
@@ -396,6 +440,7 @@ impl App {
     fn new_editor(&mut self, doc: Document) {
         self.editor = Editor::new(doc, self.config.wrap, self.editor.tabs.clone());
         self.import_name = None;
+        self.disk_stamp = None;
     }
 
     // ----- files -------------------------------------------------------------
@@ -461,6 +506,10 @@ impl App {
             }
         }
         self.path = Some(path.to_path_buf());
+        self.disk_stamp = Self::stamp(path);
+        if self.disk_stamp.is_some() {
+            self.note_recent(path);
+        }
     }
 
     /// Import a PC text file as a new, unsaved document in the text
@@ -662,6 +711,7 @@ impl App {
                 format: self.spec.machine.text_format(),
                 then: None,
                 confirmed: false,
+                overwrite: false,
             }),
             (FileJobKind::Export(kind), Some(path)) => self.export_to(&path, kind),
             (_, None) => {} // cancelled
@@ -761,6 +811,7 @@ impl App {
                 format: self.format,
                 then,
                 confirmed: false,
+                overwrite: false,
             }),
             _ => self.start_file_job(FileJobKind::SaveAs { then }),
         }
@@ -795,6 +846,7 @@ impl App {
             format,
             then,
             confirmed: false,
+            overwrite: false,
         };
         if uses(&text) {
             return self.save_to(pending(text));
@@ -860,6 +912,12 @@ impl App {
                 return;
             }
         };
+        // Another program changed the file since it was read here.
+        if !save.overwrite && Some(&save.path) == self.path.as_ref() && self.changed_on_disk() {
+            self.dialog = Some(Dialog::overwrite_changed(&self.file_name()));
+            self.pending_save = Some(save);
+            return;
+        }
         if !encoded.problem_lines.is_empty() && !save.confirmed {
             self.dialog = Some(Dialog::save_problem_lines(
                 save.format.name(),
@@ -875,6 +933,8 @@ impl App {
         self.format = save.format;
         self.editor.doc.mark_saved();
         self.note_folder(&save.path);
+        self.disk_stamp = Self::stamp(&save.path);
+        self.note_recent(&save.path);
         self.path = Some(save.path);
         let errors = match encoded.problem_lines.len() {
             0 => String::new(),
@@ -958,6 +1018,25 @@ impl App {
                 2 => self.export_chosen(ExportKind::Ascii),
                 _ => {}
             },
+            Purpose::ChangedOnDisk => {
+                if button == 0 {
+                    if let Some(path) = self.path.clone() {
+                        self.open_path(&path);
+                        self.message = Some(format!("Reloaded {}", self.file_name()));
+                    }
+                } else if let Some(path) = &self.path {
+                    // Keep mine: don't ask again until it changes again.
+                    self.disk_stamp = Self::stamp(path);
+                }
+            }
+            Purpose::OverwriteChanged => {
+                if let Some(mut save) = self.pending_save.take()
+                    && button == 0
+                {
+                    save.overwrite = true;
+                    self.save_to(save);
+                }
+            }
             Purpose::ImportCase => {
                 if button == 0 {
                     self.convert_case();
@@ -1034,6 +1113,7 @@ impl App {
             format: self.spec.machine.text_format(),
             then: None,
             confirmed: false,
+            overwrite: false,
         });
     }
 
@@ -1100,24 +1180,104 @@ impl App {
 
     /// Write the settings file now (the "Save Preferences" button).
     fn save_prefs(&mut self) {
-        self.message = Some(match self.config.save(self.spec.app_id) {
-            Ok(()) => "Preferences saved".into(),
+        let merged = self.config.merged(
+            &self.config_initial,
+            Config::load(self.spec.app_id),
+            &self.opened,
+        );
+        self.message = Some(match merged.save(self.spec.app_id) {
+            Ok(()) => {
+                self.config_initial = self.config.clone();
+                "Preferences saved".into()
+            }
             Err(e) => format!("Preferences not saved: {e}"),
         });
     }
 
-    /// At exit: save everything if "Save preferences on exit" is on.
-    /// Otherwise only record that choice, keeping the saved settings.
+    /// At exit: save the settings this window changed if "Save preferences
+    /// on exit" is on (other windows may have saved theirs meanwhile).
+    /// Otherwise only record that choice. The recent files are kept
+    /// either way.
     pub fn save_prefs_on_exit(&self) -> Result<(), String> {
-        if self.config.save_on_exit {
-            self.config.save(self.spec.app_id)
+        let on_disk = Config::load(self.spec.app_id);
+        let out = if self.config.save_on_exit {
+            self.config
+                .merged(&self.config_initial, on_disk.clone(), &self.opened)
         } else {
-            let mut saved = Config::load(self.spec.app_id);
-            if !saved.save_on_exit {
-                return Ok(());
-            }
-            saved.save_on_exit = false;
-            saved.save(self.spec.app_id)
+            // Nothing changed but the recent files and the choice itself.
+            let mut out = on_disk.merged(&on_disk, on_disk.clone(), &self.opened);
+            out.save_on_exit = false;
+            out
+        };
+        if out == on_disk {
+            return Ok(());
+        }
+        out.save(self.spec.app_id)
+    }
+
+    /// Put a file opened or saved at the top of the recent files.
+    fn note_recent(&mut self, path: &Path) {
+        let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let p = full.to_string_lossy().into_owned();
+        for list in [&mut self.opened, &mut self.config.recent] {
+            list.retain(|q| q != &p);
+            list.insert(0, p.clone());
+            list.truncate(config::MAX_RECENT);
+        }
+        self.menus = menu::menus(self.alt_charset, &self.config.recent);
+    }
+
+    /// File > (recent file `n`): open it, after "Save changes?".
+    fn open_recent(&mut self, n: usize) {
+        let Some(p) = self.config.recent.get(n).cloned() else {
+            return;
+        };
+        let path = PathBuf::from(&p);
+        if !path.is_file() {
+            self.message = Some(format!("{p} is no longer there"));
+            self.config.recent.retain(|q| q != &p);
+            self.opened.retain(|q| q != &p);
+            self.menus = menu::menus(self.alt_charset, &self.config.recent);
+            return;
+        }
+        self.dropped = Some(path);
+        self.guard(After::OpenDropped);
+    }
+
+    // ----- changes made by other programs ----------------------------------------
+
+    /// The file's modification time and size, if it can be read.
+    fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+        let m = std::fs::metadata(path).ok()?;
+        Some((m.modified().ok()?, m.len()))
+    }
+
+    /// Whether another program has changed the file since it was read or
+    /// written here.
+    fn changed_on_disk(&self) -> bool {
+        match (&self.path, self.disk_stamp) {
+            (Some(path), Some(old)) => Self::stamp(path).is_some_and(|now| now != old),
+            _ => false,
+        }
+    }
+
+    /// The window became active again: if another program changed the
+    /// file, reload it (asking first if there are unsaved changes).
+    pub fn check_disk(&mut self) {
+        if self.dialog.is_some() || self.file_job.is_some() || !self.changed_on_disk() {
+            return;
+        }
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        if self.editor.doc.is_modified() {
+            self.dialog = Some(Dialog::changed_on_disk(&self.file_name()));
+        } else {
+            self.open_path(&path);
+            self.message = Some(format!(
+                "Reloaded {}: another program changed it",
+                self.file_name()
+            ));
         }
     }
 
@@ -1142,6 +1302,326 @@ impl App {
         self.spec.keyboard.set_charset(index);
         self.config.charset = index;
         self.charset_changed = true;
+    }
+
+    // ----- find and go to line ----------------------------------------------
+
+    /// A one-line editor for the Find and Replace fields.
+    fn field_editor(&self, codes: Vec<u8>) -> Editor {
+        let mut e = Editor::new(
+            Document::from_lines(vec![codes], false),
+            WrapMode::Window,
+            self.spec.machine.default_tab_stops(),
+        );
+        e.doc.line_end();
+        e
+    }
+
+    /// The fields' layout: one long row (the view scrolls it sideways).
+    fn field_layout(&self) -> Layout {
+        Layout::new(
+            WrapMode::Window,
+            FIELD_MAX,
+            1,
+            self.spec.machine.screen_columns(),
+            0,
+        )
+    }
+
+    /// The open Find panel, if it has the keys.
+    fn active_find(&self) -> Option<&FindPage> {
+        self.find.as_ref().filter(|p| p.active)
+    }
+
+    /// The Atari text field with the focus, if one has it.
+    fn focused_field(&mut self) -> Option<&mut Editor> {
+        match self.find.as_ref()?.focused() {
+            find_page::Field::FindText => Some(&mut self.find_field),
+            find_page::Field::ReplaceText => Some(&mut self.replace_field),
+            _ => None,
+        }
+    }
+
+    fn match_rule(&self) -> search::Match {
+        search::Match {
+            case: self.match_case,
+            inverse: self.match_inverse,
+        }
+    }
+
+    /// The text to find, and to replace it with.
+    fn find_codes(&self) -> (Vec<u8>, Vec<u8>) {
+        (
+            self.find_field.doc.line(0).to_vec(),
+            self.replace_field.doc.line(0).to_vec(),
+        )
+    }
+
+    /// The find text for messages, with tags for Atari characters.
+    fn find_label(&self) -> String {
+        self.spec.machine.export_ascii(self.find_field.doc.line(0))
+    }
+
+    /// Edit > Find (or Replace): open the panel, starting with the
+    /// selected text if it's on one line.
+    fn open_find(&mut self, replace: bool) {
+        self.close_menu();
+        if let Some((a, b)) = self.editor.selection()
+            && a.line == b.line
+        {
+            let codes = self.editor.doc.lines()[a.line][a.col..b.col].to_vec();
+            self.find_field = self.field_editor(codes);
+        }
+        let focus = if replace && !self.find_field.doc.line(0).is_empty() {
+            find_page::Field::ReplaceText
+        } else {
+            find_page::Field::FindText
+        };
+        self.find = Some(FindPage::new(find_page::Mode::Find, focus));
+    }
+
+    fn open_goto(&mut self) {
+        self.close_menu();
+        self.line_text.clear();
+        self.find = Some(FindPage::new(
+            find_page::Mode::GoTo,
+            find_page::Field::LineText,
+        ));
+    }
+
+    /// Find Next (or Previous): select the next match, wrapping round.
+    fn find_next(&mut self, forward: bool, layout: &Layout) {
+        let (pat, _) = self.find_codes();
+        if pat.is_empty() {
+            self.open_find(false);
+            return;
+        }
+        let from = match self.editor.selection() {
+            Some((a, _)) if !forward => a,
+            _ => self.editor.doc.cursor(),
+        };
+        match search::find(
+            self.editor.doc.lines(),
+            &pat,
+            from,
+            forward,
+            self.match_rule(),
+        ) {
+            Some(p) => {
+                let end = Pos {
+                    line: p.line,
+                    col: p.col + pat.len(),
+                };
+                self.editor.select_range(p, end, layout);
+                self.message = None;
+            }
+            None => self.message = Some(format!("Not found: {}", self.find_label())),
+        }
+    }
+
+    /// Replace: if the selection is a match, replace it; then find the next.
+    fn replace_one(&mut self, layout: &Layout) {
+        let (pat, with) = self.find_codes();
+        if let Some((a, b)) = self.editor.selection()
+            && a.line == b.line
+            && b.col == a.col + pat.len()
+            && search::is_match(self.editor.doc.lines(), a, &pat, self.match_rule())
+        {
+            self.editor.paste(&[with], layout);
+        }
+        self.find_next(true, layout);
+    }
+
+    fn replace_all(&mut self, layout: &Layout) {
+        let (pat, with) = self.find_codes();
+        let at = search::find_all(self.editor.doc.lines(), &pat, self.match_rule());
+        if at.is_empty() {
+            self.message = Some(format!("Not found: {}", self.find_label()));
+            return;
+        }
+        self.editor.replace_matches(&at, pat.len(), &with, layout);
+        self.message = Some(format!(
+            "Replaced {} occurrence{}",
+            at.len(),
+            if at.len() == 1 { "" } else { "s" }
+        ));
+    }
+
+    fn go_to_line(&mut self, layout: &Layout) {
+        let Ok(n) = self.line_text.trim().parse::<u32>() else {
+            self.message = Some("Type a line number".into());
+            return;
+        };
+        let (pos, how) =
+            search::go_to_line(self.editor.doc.lines(), n, !self.config.goto_editor_line);
+        self.editor.click(pos, false);
+        self.editor.scroll_to_cursor(layout);
+        self.find = None;
+        self.message = match how {
+            search::GoTo::Found => None,
+            search::GoTo::Next(m) => Some(format!("There's no line {n}: went to line {m}")),
+            search::GoTo::After(m) => Some(format!("There's no line {n}: went past line {m}")),
+            search::GoTo::Last => Some(format!("There's no line {n}: went to the last line")),
+        };
+    }
+
+    /// Close the Find or Go to Line panel, and its message with it.
+    fn close_find(&mut self) {
+        self.find = None;
+        self.message = None;
+    }
+
+    fn find_apply(&mut self, f: find_page::Field, op: Op, layout: &Layout) {
+        use find_page::Field as F;
+        match (f, op) {
+            (F::MatchCase, Op::Toggle) => self.match_case = !self.match_case,
+            (F::MatchInverse, Op::Toggle) => self.match_inverse = !self.match_inverse,
+            (F::EditorLine, Op::Toggle) => {
+                self.config.goto_editor_line = !self.config.goto_editor_line
+            }
+            (F::FindNext, Op::Press) => self.find_next(true, layout),
+            (F::ReplaceOne, Op::Press) => self.replace_one(layout),
+            (F::ReplaceAll, Op::Press) => self.replace_all(layout),
+            (F::Go, Op::Press) => self.go_to_line(layout),
+            (F::Close, Op::Press) => self.close_find(),
+            _ => {}
+        }
+    }
+
+    /// A click on the panel: on an Atari field, also put its cursor there.
+    fn find_click(&mut self, x: i32, y: i32, shift: bool, f: &Frame) -> bool {
+        let Some(p) = &mut self.find else {
+            return false;
+        };
+        // A click in the text gives the keys back to the document.
+        p.active = p.contains(x, y);
+        let Some((field, op)) = p.hit(x, y) else {
+            return p.active;
+        };
+        p.focus_on(field);
+        let spot = p
+            .fields
+            .iter()
+            .find(|(g, _)| *g == field)
+            .map(|&(_, r)| (r, p.cell));
+        if let Some((r, cell)) = spot {
+            let i = usize::from(field == find_page::Field::ReplaceText);
+            let col = self.field_scroll[i] + ((x - r.x()).max(0) / cell) as usize;
+            if let Some(e) = self.focused_field() {
+                e.click(Pos { line: 0, col }, shift);
+            }
+        } else {
+            self.find_apply(field, op, &f.layout);
+        }
+        true
+    }
+
+    /// A key pressed while the Find or Go to Line panel is open. Returns
+    /// true if the panel used it; other keys go on to the Atari field
+    /// with the focus, if any, as if typed in the document.
+    fn find_key(&mut self, k: Keycode, shift: bool, layout: &Layout) -> bool {
+        use find_page::Field as F;
+        let Some(p) = &mut self.find else {
+            return false;
+        };
+        let f = p.focused();
+        match k {
+            Keycode::TAB => p.move_focus(if shift { -1 } else { 1 }),
+            Keycode::F3 => self.find_next(!shift, layout),
+            Keycode::RETURN | Keycode::KP_ENTER => match f {
+                F::ReplaceOne | F::ReplaceAll | F::Close | F::Go => {
+                    self.find_apply(f, Op::Press, layout)
+                }
+                F::LineText => self.go_to_line(layout),
+                _ => self.find_next(!shift, layout),
+            },
+            // In the Atari fields Esc is the Atari Esc key, as in the text.
+            Keycode::ESCAPE if !f.is_atari() => self.close_find(),
+            Keycode::BACKSPACE if f == F::LineText => {
+                self.line_text.pop();
+            }
+            Keycode::SPACE if !f.is_text() => {
+                self.find_apply(f, Op::Toggle, layout);
+                self.find_apply(f, Op::Press, layout);
+            }
+            // Anything else isn't the panel's: an Atari field takes it as
+            // a key, and the Go to Line box the text it types.
+            _ => return false,
+        }
+        true
+    }
+
+    /// Ctrl+A / C / X / V in an Atari field: select all, copy, cut, paste
+    /// (one line).
+    fn field_clipboard(&mut self, k: Keycode, clipboard: &ClipboardUtil) {
+        let layout = self.field_layout();
+        let machine = self.spec.machine.as_ref();
+        let paste = (k == Keycode::V)
+            .then(|| clipboard.clipboard_text().ok())
+            .flatten()
+            .map(|t| retro_core::clipboard::from_text(&t, machine).0);
+        let Some(e) = (match self.find.as_ref().map(|p| p.focused()) {
+            Some(find_page::Field::FindText) => Some(&mut self.find_field),
+            Some(find_page::Field::ReplaceText) => Some(&mut self.replace_field),
+            _ => None,
+        }) else {
+            return;
+        };
+        let copied = match k {
+            Keycode::A => {
+                e.select_all();
+                None
+            }
+            Keycode::C => e.copy(),
+            Keycode::X => e.cut(&layout),
+            Keycode::V => {
+                if let Some(first) = paste.and_then(|lines| lines.into_iter().next()) {
+                    e.paste(&[first], &layout);
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(lines) = copied {
+            let text = retro_core::clipboard::to_text(&lines, machine);
+            let _ = clipboard.set_clipboard_text(&text);
+        }
+    }
+
+    /// Text typed in the Go to Line field (digits only).
+    fn line_text_input(&mut self, text: &str) {
+        self.line_text
+            .extend(text.chars().filter(char::is_ascii_digit));
+    }
+
+    /// The values the panel shows.
+    pub fn find_view(&self) -> find_page::View<'_> {
+        find_page::View {
+            match_case: self.match_case,
+            match_inverse: self.match_inverse,
+            line: &self.line_text,
+            editor_line: self.config.goto_editor_line,
+        }
+    }
+
+    pub fn test_go_to(&mut self, line: &str, layout: &Layout) {
+        self.open_goto();
+        self.line_text_input(line);
+        self.go_to_line(layout);
+    }
+
+    pub fn test_open_find(&mut self, text: &str, layout: &Layout) {
+        self.open_find(false);
+        let codes = self
+            .spec
+            .machine
+            .import_text(text.as_bytes())
+            .lines
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        self.find_field = self.field_editor(codes);
+        self.find_next(true, layout);
     }
 
     // ----- print page ----------------------------------------------------------
@@ -1192,6 +1672,7 @@ impl App {
             width: usize::from(self.config.print_fill),
             size: self.config.print_size,
             header: self.config.print_header,
+            open_after: self.config.print_open,
             summary,
         }
     }
@@ -1209,8 +1690,8 @@ impl App {
                     .clamp(config::MIN_PRINT_SIZE, config::MAX_PRINT_SIZE);
             }
             (P::Header, Op::Toggle) => self.config.print_header = !self.config.print_header,
-            (P::Print, Op::Press) => self.print_now(),
-            (P::SavePdf, Op::Press) => {
+            (P::OpenAfter, Op::Toggle) => self.config.print_open = !self.config.print_open,
+            (P::Save, Op::Press) => {
                 self.print = None;
                 self.start_file_job(FileJobKind::SavePdf);
             }
@@ -1235,8 +1716,8 @@ impl App {
             Keycode::DOWN => p.move_focus(1),
             Keycode::ESCAPE => self.print = None,
             Keycode::RETURN | Keycode::KP_ENTER => match f {
-                P::SavePdf | P::Cancel => self.print_apply(f, Op::Press),
-                _ => self.print_apply(P::Print, Op::Press),
+                P::Cancel => self.print_apply(f, Op::Press),
+                _ => self.print_apply(P::Save, Op::Press),
             },
             Keycode::LEFT | Keycode::RIGHT => {
                 if let Some(cur) = choice {
@@ -1269,54 +1750,21 @@ impl App {
         (pdf, retro_core::print::page_count(lines, &s))
     }
 
-    /// Print: write the PDF to a temporary file and open it in the
-    /// system's PDF viewer, whose print dialog does the printing.
-    fn print_now(&mut self) {
-        self.print = None;
-        let (pdf, pages) = self.print_pdf();
-        let dir = std::env::temp_dir().join(self.spec.app_id);
-        let stem = Path::new(&self.file_name())
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled".into());
-        let _ = std::fs::create_dir_all(&dir);
-        // A viewer may still have an earlier printout open (and locked, on
-        // Windows), so try a few names.
-        let written = (1..=9).find_map(|n| {
-            let name = if n == 1 {
-                format!("{stem}.pdf")
-            } else {
-                format!("{stem} ({n}).pdf")
-            };
-            let path = dir.join(name);
-            std::fs::write(&path, &pdf).ok().map(|()| path)
-        });
-        let Some(path) = written else {
-            self.message = Some(format!("Print failed: can't write to {}", dir.display()));
-            return;
-        };
-        self.message = Some(match open_in_viewer(&path) {
-            Ok(()) => format!(
-                "Opened the printout ({pages} page{}) in the PDF viewer: print from there",
-                if pages == 1 { "" } else { "s" }
-            ),
-            Err(e) => format!(
-                "Can't open the PDF viewer ({e}); the printout is {}",
-                path.display()
-            ),
-        });
-    }
-
     fn save_pdf(&mut self, path: &Path) {
         let (pdf, pages) = self.print_pdf();
         match write_atomically(path, &pdf) {
             Ok(()) => {
                 self.note_folder(path);
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                self.message = Some(format!(
-                    "Saved {name} ({pages} page{})",
-                    if pages == 1 { "" } else { "s" }
-                ));
+                let pages = format!("{pages} page{}", if pages == 1 { "" } else { "s" });
+                self.message = Some(if !self.config.print_open {
+                    format!("Saved {name} ({pages})")
+                } else {
+                    match open_in_viewer(path) {
+                        Ok(()) => format!("Saved {name} ({pages}) and opened it to print"),
+                        Err(e) => format!("Saved {name} ({pages}); can't open it: {e}"),
+                    }
+                });
             }
             Err(e) => self.message = Some(format!("Save failed: {e}")),
         }
@@ -1652,6 +2100,12 @@ impl App {
             SaveListingAs => self.start_file_job(FileJobKind::SaveListingAs),
             Export => self.dialog = Some(Dialog::export(&self.file_name())),
             Print => self.open_print(),
+            Find => self.open_find(false),
+            Replace => self.open_find(true),
+            FindNext => self.find_next(true, layout),
+            FindPrevious => self.find_next(false, layout),
+            GoToLine => self.open_goto(),
+            OpenRecent(n) => self.open_recent(n as usize),
             Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);
@@ -1785,7 +2239,7 @@ impl App {
                 let cmd = self.open_items().and_then(|m| {
                     m.items
                         .iter()
-                        .find(|it| it.command.is_some() && menu::hot_key(it.label) == key)
+                        .find(|it| it.command.is_some() && menu::hot_key(&it.label) == key)
                         .and_then(|it| it.command)
                 });
                 if let Some(c) = cmd
@@ -1826,6 +2280,17 @@ impl App {
         if self.print.is_some() {
             return false;
         }
+        // The Find panel: text goes to an Atari field the normal way.
+        if let Some(p) = self.active_find() {
+            match p.focused() {
+                find_page::Field::LineText => {
+                    self.line_text_input(text);
+                    return false;
+                }
+                f if !f.is_atari() => return false,
+                _ => {}
+            }
+        }
         let ctrl_held = held.intersects(shortcut_mod() | self.atari_ctrl_mod());
         let mut typed = false;
         if self.overlay == Overlay::None && !ctrl_held {
@@ -1840,6 +2305,41 @@ impl App {
     /// Returns false if the key means nothing to the machine.
     fn machine_key(&mut self, input: KeyInput, layout: &Layout) -> bool {
         let action = self.spec.keyboard.handle(input);
+        // Typing in a Find panel field: the one-line editing keys only.
+        let field_layout = self.field_layout();
+        let machine = self.spec.machine.as_ref();
+        if let Some(p) = self.find.as_ref().filter(|p| p.active)
+            && p.focused().is_atari()
+        {
+            use EditAction as A;
+            let field = if p.focused() == find_page::Field::FindText {
+                &mut self.find_field
+            } else {
+                &mut self.replace_field
+            };
+            let one_line = matches!(
+                action,
+                A::Insert(_)
+                    | A::Backspace
+                    | A::DeleteForward
+                    | A::InsertSpace
+                    | A::DeleteLine
+                    | A::MoveLeft
+                    | A::MoveRight
+                    | A::LineStart
+                    | A::LineEnd
+                    | A::ToggleOverwrite
+                    | A::ToggleInverse
+                    | A::EscapePending
+            );
+            if one_line {
+                field.apply(action, &field_layout, machine, input.mods.shift);
+                if let Some(note) = field.take_note() {
+                    self.message = Some(note);
+                }
+            }
+            return one_line;
+        }
         if action != EditAction::None {
             self.message = None;
         }
@@ -1911,6 +2411,24 @@ impl App {
             self.swallow_text = true;
             return false;
         }
+        // The Find panel takes its own keys; the rest go to its Atari
+        // field (if one has the focus) as if typed in the text. The
+        // editor's shortcuts still work, Ctrl+A/C/X/V acting on the field.
+        if let Some(p) = self.active_find() {
+            let in_field = p.focused().is_atari();
+            if editor_ctrl {
+                if in_field && matches!(k, Keycode::A | Keycode::C | Keycode::X | Keycode::V) {
+                    self.field_clipboard(k, ctx.clipboard);
+                    self.swallow_text = true;
+                    return false;
+                }
+            } else if self.find_key(k, shift, layout) {
+                self.swallow_text = true;
+                return false;
+            } else if !in_field {
+                return false;
+            }
+        }
 
         if self.overlay != Overlay::None {
             match k {
@@ -1939,11 +2457,22 @@ impl App {
         }
 
         // Editor commands (left Ctrl and function keys) never click.
+        let mac = cfg!(target_os = "macos");
+        let option = m.intersects(Mod::LALTMOD | Mod::RALTMOD);
         if editor_ctrl {
             use Command::*;
             let cmd = match k {
                 Keycode::N => Some(New),
                 Keycode::O => Some(Open),
+                // Find: Ctrl+F, Ctrl+H, Ctrl+G; on a Mac ⌘F, ⌥⌘F, ⌘G
+                // (find next), ⇧⌘G, ⌘L.
+                Keycode::F if mac && option => Some(Replace),
+                Keycode::F => Some(Find),
+                Keycode::H if !mac => Some(Replace),
+                Keycode::G if mac && shift => Some(FindPrevious),
+                Keycode::G if mac => Some(FindNext),
+                Keycode::G => Some(GoToLine),
+                Keycode::L if mac => Some(GoToLine),
                 Keycode::P => Some(Print),
                 Keycode::S if shift => Some(SaveAs),
                 Keycode::S => Some(Save),
@@ -1990,6 +2519,16 @@ impl App {
             return false;
         }
 
+        // F3 / Shift+F3: Find Next / Previous.
+        if k == Keycode::F3 && !alt && !atari_ctrl {
+            let c = if shift {
+                Command::FindPrevious
+            } else {
+                Command::FindNext
+            };
+            self.command(c, ctx);
+            return false;
+        }
         // Function keys only act on their own: Shift+F4 is not F4.
         let plain = !shift && !alt && !atari_ctrl;
         let fkey = match k {
@@ -2104,6 +2643,10 @@ impl App {
                 p.focus_on(f);
                 self.print_apply(f, op);
             }
+            return;
+        }
+        // The Find panel stays open while clicking in the text.
+        if self.find_click(x, y, shift, f) {
             return;
         }
         if self.overlay != Overlay::None {
@@ -2224,6 +2767,9 @@ fn numpad_navigation(k: Keycode) -> Option<Keycode> {
 
 /// Write to a temporary file next to `path`, then rename over it, so a
 /// failed write never leaves a half-written file.
+/// The longest Find or Replace text.
+const FIELD_MAX: usize = 120;
+
 /// The modifier for the editor's shortcuts: Command on macOS, left Ctrl
 /// elsewhere (right Ctrl is the Atari CONTROL key there by default).
 fn shortcut_mod() -> Mod {

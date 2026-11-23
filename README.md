@@ -41,8 +41,9 @@ character set is built in.
   off).
 - Imports and exports PC text: UTF-8 for the Atari font, standard Unicode,
   or plain ASCII with `{tags}` (see [File types](#file-types)).
-- Prints with the Atari characters (File > Print), or saves the printout as
-  a PDF.
+- Prints with the Atari characters, by way of a PDF (File > Print to PDF).
+- Find and Replace, typed in Atari text with the editor's own keys, and
+  Go to Line by BASIC or MAC/65 line number or by editor line.
 - Opens tokenized programs from nine Atari languages and saves Atari BASIC
   programs tokenized (see [File types](#file-types)).
 
@@ -54,6 +55,13 @@ character set is built in.
 - Drop a file on the window to open it. Drop several and the first opens
   in that window, each of the others in a new window of its own. On a Mac,
   Finder's *Open With* offers Atari Editor for any file.
+- The File menu lists the last six files opened or saved.
+- If another program (an emulator saving through its H: device, say)
+  changes the open file, the editor notices when you come back to it: it
+  reloads the file, or asks first if you have unsaved changes, and asks
+  before a Save would replace the other program's version.
+- Several windows can be open at once; each saves only the preferences
+  changed in it.
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
   zoom, text and background colours, character set, key click, CONTROL
   key, line length warning, attract mode, default folder (last used or a
@@ -137,14 +145,33 @@ dialect is recognized from the file itself.
     and `{INV}`...`{/INV}` around inverse characters.
 
   The document keeps its own file and format.
-- **Printing**: File > Print (Ctrl+P) lays the document out on Letter or A4
-  pages, 40 characters a line or as wide as the page, at the character
-  size you choose (5 to 24 points), with an optional header of the file
-  name and page numbers. The characters are drawn from the editor's own
-  Atari character set, so graphics and inverse video print exactly as on
-  screen and no font needs installing. *Print* opens the printout as a PDF
-  in your PDF viewer, where its Print command chooses the printer and
-  pages; *Save as PDF* saves it instead. The settings are remembered.
+- **Printing**: File > Print to PDF (Ctrl+P) lays the document out on
+  Letter or A4 pages, 40 characters a line or as wide as the page, at the
+  character size you choose (5 to 24 points), with an optional header of
+  the file name and page numbers, and saves it as a PDF where you choose.
+  The characters are drawn from the editor's own Atari character set, so
+  graphics and inverse video print exactly as on screen and no font needs
+  installing. With *Open the PDF to print it* ticked, the PDF then opens in
+  your PDF viewer, whose Print command chooses the printer and pages. The
+  settings are remembered.
+- **Finding**: Edit > Find (Ctrl+F) opens a panel at the top right. Its
+  Find and Replace boxes are Atari text, typed with the same keys as the
+  document: the inverse key, CONTROL+letter graphics, Esc for cursor and
+  other control characters, the arrow keys, Insert and Delete. Text
+  selected on one line when Find opens is filled in. Without *Match case*,
+  letters match in either case; without *Match inverse*, characters match
+  in normal or inverse video. Enter or Find Next (F3) finds the next
+  match, Shift+Enter or Shift+F3 the previous, wrapping round the file;
+  Replace replaces the found text and finds the next; Replace All is one
+  Undo step. Clicking in the text gives the keys back to the document,
+  leaving the panel open; Close (or Esc on its buttons) closes it.
+  Edit > Go to Line (Ctrl+G) jumps to a BASIC or MAC/65 line number, or
+  with *Editor line* ticked (and in text without line numbers) to the nth
+  line in the editor, as counted by "Ln" in the status bar. A line number
+  that isn't there goes to the next one up; one above the highest goes
+  just past that line (the start of the next line, or the end of that
+  one). An editor line past the end of the file goes to the last line. On a Mac: ⌘F,
+  ⌘G, ⇧⌘G, ⌥⌘F and ⌘L.
 - **Importing**: File > Import reads a PC text file (any line endings,
   UTF-8 or not) as ATASCII: tags and Private Use characters become their
   Atari codes, a tab becomes the Atari TAB, and accented letters the

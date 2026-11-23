@@ -249,6 +249,25 @@ impl<F: Copy + PartialEq> Ui<'_, '_, '_, F> {
         self.hits.push((r, f, Op::Press));
     }
 
+    /// An empty framed box for a field the caller fills in (the Atari
+    /// text fields): clicking it focuses `f`.
+    pub fn field_box(&mut self, f: F, r: Rect) {
+        let t = &THEME;
+        self.canvas.set_draw_color(t.border);
+        let _ = self.canvas.draw_rect(r);
+        self.hits.push((r, f, Op::Focus));
+        let p = self.pad;
+        self.rings.push((
+            f,
+            Rect::new(
+                r.x() - p,
+                r.y() - p / 2,
+                r.width() + p as u32 * 2,
+                r.height() + p as u32,
+            ),
+        ));
+    }
+
     /// Draw the focus ring around the focused control.
     pub fn draw_focus(&mut self) {
         let t = &THEME;

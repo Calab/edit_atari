@@ -1,6 +1,6 @@
-//! The Print page: paper, line width, character size and header, then
-//! Print (a PDF opened in the system's viewer, which prints it) or Save as
-//! PDF.
+//! The Print to PDF page: paper, line width, character size and header,
+//! then Save PDF (and, if chosen, open it in the system's PDF viewer to
+//! print from there).
 
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -18,8 +18,8 @@ pub enum Field {
     Width,
     Size,
     Header,
-    SavePdf,
-    Print,
+    OpenAfter,
+    Save,
     Cancel,
 }
 
@@ -28,8 +28,8 @@ const ORDER: [Field; 7] = [
     Field::Width,
     Field::Size,
     Field::Header,
-    Field::SavePdf,
-    Field::Print,
+    Field::OpenAfter,
+    Field::Save,
     Field::Cancel,
 ];
 
@@ -41,6 +41,7 @@ pub struct View {
     pub width: usize,
     pub size: u32,
     pub header: bool,
+    pub open_after: bool,
     /// What the settings give, e.g. "54 characters a line, 69 lines a page,
     /// 7 pages".
     pub summary: String,
@@ -49,11 +50,17 @@ pub struct View {
 const PAPERS: [&str; 2] = ["Letter", "A4"];
 const WIDTHS: [&str; 2] = ["40 characters", "As wide as the page"];
 const HEADER: &str = "File name and page numbers";
-const SAVE_PDF: &str = "Save as PDF...";
-const PRINT: &str = "Print...";
+const OPEN_AFTER: &str = "Open the PDF to print it";
+const SAVE: &str = "Save PDF...";
 const CANCEL: &str = "Cancel";
 
-const ROWS: [&str; 4] = ["Paper", "Line width", "Character size", "Header"];
+const ROWS: [&str; 5] = [
+    "Paper",
+    "Line width",
+    "Character size",
+    "Header",
+    "After saving",
+];
 
 pub struct PrintPage {
     focus: usize,
@@ -63,8 +70,8 @@ pub struct PrintPage {
 impl PrintPage {
     pub fn new() -> Self {
         Self {
-            // Enter prints straight away.
-            focus: ORDER.iter().position(|&f| f == Field::Print).unwrap_or(0),
+            // Enter saves straight away.
+            focus: ORDER.iter().position(|&f| f == Field::Save).unwrap_or(0),
             hits: Vec::new(),
         }
     }
@@ -117,15 +124,15 @@ impl PrintPage {
         let controls_w = choice_w(font, &PAPERS)
             .max(choice_w(font, &WIDTHS))
             .max(lh * 2 / 3 + pad * 2 + font.measure(HEADER))
+            .max(lh * 2 / 3 + pad * 2 + font.measure(OPEN_AFTER))
             .max(font.measure(&v.summary));
-        let buttons_w =
-            font.measure(SAVE_PDF) + font.measure(PRINT) + font.measure(CANCEL) + pad * 30;
+        let buttons_w = font.measure(SAVE) + font.measure(CANCEL) + pad * 20;
         let w =
             ((label_w + pad * 6 + controls_w).max(buttons_w) + pad * 8).min(width as i32 - pad * 4);
         let title_h = lh + pad * 2;
         let button_h = lh + pad * 2;
-        // Title, four rows, the summary, then the buttons.
-        let h = title_h + pad * 3 + row * 5 + pad * 2 + button_h + pad * 3;
+        // Title, five rows, the summary, then the buttons.
+        let h = title_h + pad * 3 + row * 6 + pad * 2 + button_h + pad * 3;
         let x0 = (width as i32 - w) / 2;
         let y0 = ((height as i32 - h) / 2).max(0);
 
@@ -137,7 +144,7 @@ impl PrintPage {
         canvas.set_draw_color(t.border);
         let _ = canvas.draw_line((x0, y0 + title_h), (x0 + w - 1, y0 + title_h));
         let _ = canvas.draw_rect(frame);
-        font.draw(canvas, x0 + pad * 4, y0 + pad, "Print", t.text);
+        font.draw(canvas, x0 + pad * 4, y0 + pad, "Print to PDF", t.text);
 
         self.hits.clear();
         let mut ui = Ui {
@@ -166,23 +173,24 @@ impl PrintPage {
                     let end = ui.spinner(Field::Size, cx, y, &v.size.to_string(), 2);
                     ui.font.draw(ui.canvas, end + pad * 2, y, "points", t.text);
                 }
-                _ => {
+                "Header" => {
                     ui.checkbox(Field::Header, cx, y, HEADER, v.header);
+                }
+                _ => {
+                    ui.checkbox(Field::OpenAfter, cx, y, OPEN_AFTER, v.open_after);
                 }
             }
             y += row;
         }
         ui.font.draw(ui.canvas, cx, y, &v.summary, t.dim);
 
-        // Save as PDF on the left; Print and Cancel on the right.
+        // Save PDF and Cancel on the right.
         let by = y0 + h - pad * 3 - button_h;
         let cancel_w = ui.font.measure(CANCEL) + pad * 8;
-        let print_w = ui.font.measure(PRINT) + pad * 8;
+        let save_w = ui.font.measure(SAVE) + pad * 8;
         let bx = x0 + w - pad * 4 - cancel_w;
         ui.button_w(Field::Cancel, bx, by, cancel_w, CANCEL);
-        ui.button_w(Field::Print, bx - pad * 2 - print_w, by, print_w, PRINT);
-        let save_w = ui.font.measure(SAVE_PDF) + pad * 4;
-        ui.button_w(Field::SavePdf, lx, by, save_w, SAVE_PDF);
+        ui.button_w(Field::Save, bx - pad * 2 - save_w, by, save_w, SAVE);
         ui.draw_focus();
     }
 }

@@ -45,6 +45,10 @@ pub enum Purpose {
     ExportLossy(crate::app::ExportKind),
     /// After Import: Convert to capitals / Leave As Is.
     ImportCase,
+    /// Another program changed the file: Reload / Keep Mine.
+    ChangedOnDisk,
+    /// Saving over a file another program changed: Save Anyway / Cancel.
+    OverwriteChanged,
 }
 
 pub struct Dialog {
@@ -82,6 +86,39 @@ impl Dialog {
             buttons: vec!["OK"],
             focus: 0,
             cancel: 0,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Reload, 1 = Keep Mine.
+    pub fn changed_on_disk(file_name: &str) -> Self {
+        Self {
+            purpose: Purpose::ChangedOnDisk,
+            title: "File changed".into(),
+            text: format!(
+                "\"{file_name}\" was changed by another program.\n\
+                 Reload it, losing your unsaved changes here,\n\
+                 or keep your version?"
+            ),
+            buttons: vec!["Reload", "Keep Mine"],
+            focus: 1,
+            cancel: 1,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Save Anyway, 1 = Cancel.
+    pub fn overwrite_changed(file_name: &str) -> Self {
+        Self {
+            purpose: Purpose::OverwriteChanged,
+            title: "File changed".into(),
+            text: format!(
+                "\"{file_name}\" was changed by another program since\n\
+                 it was opened here. Saving replaces that version."
+            ),
+            buttons: vec!["Save Anyway", "Cancel"],
+            focus: 1,
+            cancel: 1,
             button_rects: Vec::new(),
         }
     }

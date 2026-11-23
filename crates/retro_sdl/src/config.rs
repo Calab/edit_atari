@@ -74,7 +74,16 @@ pub struct Config {
     pub print_fill: bool,
     pub print_size: u32,
     pub print_header: bool,
+    /// Open the PDF in the system's viewer after Print to PDF saves it.
+    pub print_open: bool,
+    /// Go to Line counts lines in the editor, not by program line number.
+    pub goto_editor_line: bool,
+    /// Files opened or saved lately, most recent first.
+    pub recent: Vec<String>,
 }
+
+/// How many recent files the File menu lists.
+pub const MAX_RECENT: usize = 6;
 
 impl Config {
     /// The warning column, or `None` when the warning is off.
@@ -117,6 +126,9 @@ impl Default for Config {
             print_fill: false,
             print_size: DEFAULT_PRINT_SIZE,
             print_header: true,
+            print_open: true,
+            goto_editor_line: false,
+            recent: Vec::new(),
         }
     }
 }
@@ -259,6 +271,13 @@ impl Config {
                     }
                 }
                 "print_header" => c.print_header = v != "off",
+                "print_open" => c.print_open = v != "off",
+                "goto_editor_line" => c.goto_editor_line = v == "on",
+                "recent" => {
+                    if !v.is_empty() && c.recent.len() < MAX_RECENT {
+                        c.recent.push(v.to_string());
+                    }
+                }
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -300,7 +319,12 @@ impl Config {
              print_paper = {}\n\
              print_width = {}\n\
              print_size = {}\n\
-             print_header = {}\n",
+             print_header = {}\n\
+             print_open = {}\n\
+             # Go to Line: on = line in the editor, off = program line number\n\
+             goto_editor_line = {}\n\
+             # Recent files, most recent first\n\
+             {}",
             match self.control_key {
                 ControlKey::RightCtrl => "right_ctrl",
                 ControlKey::LeftAlt => "left_alt",
@@ -334,7 +358,90 @@ impl Config {
             if self.print_fill { "page" } else { "40" },
             self.print_size,
             on_off(self.print_header),
+            on_off(self.print_open),
+            on_off(self.goto_editor_line),
+            self.recent
+                .iter()
+                .map(|p| format!("recent = {p}\n"))
+                .collect::<String>(),
         )
+    }
+
+    /// The settings to write for a window that started with `initial` and
+    /// now has `self`, when the file now holds `on_disk` (another window
+    /// may have saved since): the settings this window changed, over the
+    /// ones on disk. `opened` are the files this window opened or saved,
+    /// most recent first; they go before the others in the recent list.
+    pub fn merged(&self, initial: &Config, on_disk: Config, opened: &[String]) -> Config {
+        let mut out = on_disk;
+        // Every field, so a new one can't be forgotten here.
+        let Config {
+            control_key,
+            wrap,
+            scale,
+            key_click,
+            click_volume,
+            line_warning_on,
+            line_warning,
+            charset,
+            dir_mode,
+            default_dir,
+            last_dir,
+            save_on_exit,
+            text_color,
+            background_color,
+            border_color,
+            attract_on,
+            attract_minutes,
+            print_paper,
+            print_fill,
+            print_size,
+            print_header,
+            print_open,
+            goto_editor_line,
+            recent: _,
+        } = self;
+        macro_rules! changed {
+            ($($f:ident),*) => {
+                $(if *$f != initial.$f {
+                    out.$f = $f.clone();
+                })*
+            };
+        }
+        changed!(
+            control_key,
+            wrap,
+            scale,
+            key_click,
+            click_volume,
+            line_warning_on,
+            line_warning,
+            charset,
+            dir_mode,
+            default_dir,
+            last_dir,
+            save_on_exit,
+            text_color,
+            background_color,
+            border_color,
+            attract_on,
+            attract_minutes,
+            print_paper,
+            print_fill,
+            print_size,
+            print_header,
+            print_open,
+            goto_editor_line
+        );
+        let mut recent: Vec<String> = opened.to_vec();
+        for p in std::mem::take(&mut out.recent) {
+            if !recent.contains(&p) {
+                recent.push(p);
+            }
+        }
+        recent.truncate(MAX_RECENT);
+        out.recent = recent;
+        out
     }
 
     pub fn save(&self, app_id: &str) -> Result<(), String> {
@@ -378,8 +485,31 @@ mod tests {
             print_fill: true,
             print_size: 8,
             print_header: false,
+            print_open: false,
+            goto_editor_line: true,
+            recent: vec!["/home/me/PROG.BAS".into(), "C:\\Atari\\GAME.TUR".into()],
         };
         assert_eq!(Config::parse(&c.to_text()), c);
+    }
+
+    #[test]
+    fn merging_keeps_other_windows_changes() {
+        let initial = Config::default();
+        // Another window changed the zoom and opened a file since.
+        let on_disk = Config {
+            scale: 4,
+            recent: vec!["B.BAS".into(), "A.BAS".into()],
+            ..Config::default()
+        };
+        // This one only turned the key click off, and opened C.BAS.
+        let mine = Config {
+            key_click: false,
+            ..Config::default()
+        };
+        let m = mine.merged(&initial, on_disk, &["C.BAS".into(), "A.BAS".into()]);
+        assert_eq!(m.scale, 4);
+        assert!(!m.key_click);
+        assert_eq!(m.recent, ["C.BAS", "A.BAS", "B.BAS"]);
     }
 
     #[test]

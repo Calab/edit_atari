@@ -6,6 +6,7 @@
 mod app;
 pub mod config;
 mod dialog;
+mod find_page;
 pub mod menu;
 mod prefs;
 mod print_page;
@@ -238,6 +239,46 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.menu.context = Some((x, y));
     }
+    // Keys, as if typed: ^X is Ctrl+X, \n is Enter, anything else is
+    // typed (key down, then its text).
+    if let Ok(keys) = std::env::var("RETRO_EDITOR_KEYS") {
+        use sdl2::keyboard::{Keycode, Mod};
+        let mut chars = keys.chars();
+        while let Some(c) = chars.next() {
+            let frame = app.frame(canvas.output_size()?);
+            let ctx = app::Ctx {
+                clipboard: &clipboard,
+                frame: &frame,
+            };
+            match c {
+                '^' => {
+                    let k = chars.next().unwrap_or('A').to_ascii_lowercase();
+                    let code = Keycode::from_i32(k as i32).unwrap_or(Keycode::A);
+                    app.key_down(code, Mod::LCTRLMOD, false, &ctx);
+                }
+                '\n' => {
+                    app.key_down(Keycode::RETURN, Mod::NOMOD, false, &ctx);
+                }
+                c => {
+                    let code = Keycode::from_i32(c.to_ascii_lowercase() as i32);
+                    if let Some(code) = code {
+                        app.key_down(code, Mod::NOMOD, false, &ctx);
+                    }
+                    app.text_input(&c.to_string(), Mod::NOMOD, &frame.layout);
+                }
+            }
+        }
+    }
+    // Go to this line number.
+    if let Ok(n) = std::env::var("RETRO_EDITOR_GOTO") {
+        let frame = app.frame(canvas.output_size()?);
+        app.test_go_to(&n, &frame.layout);
+    }
+    // Open the Find panel and find this text.
+    if let Ok(text) = std::env::var("RETRO_EDITOR_FIND") {
+        let frame = app.frame(canvas.output_size()?);
+        app.test_open_find(&text, &frame.layout);
+    }
     // Files to drop, separated as in PATH (':' or ';').
     if let Some(paths) = std::env::var_os("RETRO_EDITOR_DROP") {
         app.drop_files(std::env::split_paths(&paths).collect());
@@ -353,6 +394,11 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     win_event: WindowEvent::SizeChanged(..),
                     ..
                 } => app.editor.scroll_to_cursor(&frame.layout),
+                // Back in the window: has another program changed the file?
+                Event::Window {
+                    win_event: WindowEvent::FocusGained,
+                    ..
+                } => app.check_disk(),
                 Event::KeyDown {
                     keycode: Some(k),
                     scancode,

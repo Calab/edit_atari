@@ -204,6 +204,30 @@ mod tests {
     }
 
     #[test]
+    fn replace_all_is_one_undo_step() {
+        use retro_core::{Editor, WrapMode, search};
+        let m = Atari::default();
+        let doc = Document::from_lines(vec![b"A=A+1:A=2".to_vec(), b"PRINT A".to_vec()], true);
+        let mut ed = Editor::new(doc, WrapMode::Native, m.default_tab_stops());
+        let layout = ed.layout(&m, 40, 24);
+        let at = search::find_all(
+            ed.doc.lines(),
+            b"A",
+            search::Match {
+                case: true,
+                inverse: true,
+            },
+        );
+        ed.replace_matches(&at, 1, b"COUNT", &layout);
+        assert_eq!(ed.doc.lines()[0], b"COUNT=COUNT+1:COUNT=2");
+        assert_eq!(ed.doc.lines()[1], b"PRINT COUNT");
+        assert_eq!(ed.doc.cursor(), retro_core::Pos { line: 1, col: 11 });
+        assert!(ed.undo(&layout));
+        assert_eq!(ed.doc.lines()[0], b"A=A+1:A=2");
+        assert_eq!(ed.doc.lines()[1], b"PRINT A");
+    }
+
+    #[test]
     fn undo_selection_and_paste() {
         use retro_core::{EditAction::*, Editor, Pos, WrapMode};
         let m = Atari::default();

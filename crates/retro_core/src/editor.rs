@@ -149,6 +149,43 @@ impl Editor {
         self.scroll_to_cursor(layout);
     }
 
+    /// Select from `a` to `b` (the cursor ends at `b`) and show it.
+    pub fn select_range(&mut self, a: Pos, b: Pos, layout: &Layout) {
+        self.anchor = Some(a);
+        self.doc.set_cursor(b);
+        self.want_x = None;
+        self.group = None;
+        self.scroll_to_cursor(layout);
+    }
+
+    /// Replace `len` codes at each of `at` (non-overlapping, in document
+    /// order, each within one line) with `with`, as one undo step. The
+    /// cursor ends after the last replacement.
+    pub fn replace_matches(&mut self, at: &[Pos], len: usize, with: &[u8], layout: &Layout) {
+        let Some(&last) = at.last() else { return };
+        self.checkpoint(None);
+        self.anchor = None;
+        // From the end, so earlier positions stay valid.
+        for &p in at.iter().rev() {
+            self.doc.delete_range(
+                p,
+                Pos {
+                    line: p.line,
+                    col: p.col + len,
+                },
+            );
+            self.doc.set_cursor(p);
+            self.doc.insert_text(&[with.to_vec()]);
+        }
+        let shift: usize = at.iter().filter(|p| p.line == last.line).count();
+        let col = last.col + shift * with.len() - (shift - 1) * len;
+        self.doc.set_cursor(Pos {
+            line: last.line,
+            col,
+        });
+        self.scroll_to_cursor(layout);
+    }
+
     // ----- undo ------------------------------------------------------------
 
     /// Save the state before an edit. Edits in the same `group` as the

@@ -8,6 +8,7 @@ use sdl2::render::{Canvas, Texture};
 use sdl2::video::Window;
 
 use crate::app::{App, Frame, Overlay};
+use crate::find_page;
 use crate::menu::{self, THEME};
 use crate::render::Grid;
 use crate::ui_font::UiFont;
@@ -55,6 +56,29 @@ impl App {
 
         self.draw_status(canvas, font, f);
 
+        // The Find panel, under the menus.
+        if let Some(mut p) = self.find.take() {
+            // Atari characters in its fields at twice their size (more on
+            // high-DPI displays), whatever the zoom.
+            let cell = 8 * (2.0 * self.ratio).round().max(1.0) as i32;
+            let found = self.found_rect(f);
+            p.draw(
+                canvas,
+                small,
+                &self.find_view(),
+                f.width,
+                (f.text_top, f.status_top),
+                found,
+                self.prefs_pad,
+                cell,
+            );
+            let focused = p.focused();
+            for &(field, r) in &p.fields {
+                self.draw_field(canvas, atlas, field, r, cell, p.active && field == focused);
+            }
+            self.find = Some(p);
+        }
+
         // Menu bar last, so an open menu covers the text.
         let menus = std::mem::take(&mut self.menus);
         let state = self.menu;
@@ -92,6 +116,98 @@ impl App {
                 self.prefs_pad,
             );
             self.print = Some(p);
+        }
+    }
+
+    /// Where the selection (the found text) is on screen, or the cursor
+    /// if nothing is selected: the rows it spans, for the Find panel to
+    /// keep clear of. `None` if it's scrolled out of view.
+    fn found_rect(&self, f: &Frame) -> Option<Rect> {
+        let doc = &self.editor.doc;
+        let (a, b) = self
+            .editor
+            .selection()
+            .unwrap_or((doc.cursor(), doc.cursor()));
+        let layout = &f.layout;
+        let (row_a, col_a) = layout.locate(doc, a);
+        let (row_b, col_b) = layout.locate(doc, b);
+        let top = self.editor.top;
+        if row_b < top || row_a >= top + layout.rows {
+            return None;
+        }
+        let cell = f.cell as i32;
+        let x = |col: usize| f.origin_x + (layout.left_margin + col) as i32 * cell;
+        let y = |row: usize| f.text_top + (row as i32 - top as i32) * cell;
+        // One row: just the text; several: the full width of those rows.
+        let (x0, x1) = if row_a == row_b {
+            (x(col_a), x(col_b.max(col_a + 1)))
+        } else {
+            (x(0), x(layout.text_cols))
+        };
+        Some(Rect::new(
+            x0,
+            y(row_a.max(top)),
+            (x1 - x0).max(1) as u32,
+            ((row_b.min(top + layout.rows - 1) - row_a.max(top) + 1) as i32 * cell) as u32,
+        ))
+    }
+
+    /// An Atari text field of the Find panel in `r`: its text in the
+    /// screen's colours, scrolled to keep the cursor in view, with the
+    /// selection, and the cursor when it has the focus.
+    fn draw_field(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        atlas: &mut Texture,
+        field: find_page::Field,
+        r: Rect,
+        cell: i32,
+        focused: bool,
+    ) {
+        let c = self.screen_colors();
+        let i = usize::from(field == find_page::Field::ReplaceText);
+        let e = if i == 0 {
+            &self.find_field
+        } else {
+            &self.replace_field
+        };
+        let line = e.doc.line(0);
+        let cursor = e.doc.cursor().col;
+        let cols = (r.width() as i32 / cell).max(1) as usize;
+        let scroll = &mut self.field_scroll[i];
+        if cursor < *scroll {
+            *scroll = cursor;
+        } else if cursor >= *scroll + cols {
+            *scroll = cursor + 1 - cols;
+        }
+        let scroll = *scroll;
+        canvas.set_draw_color(c.background);
+        let _ = canvas.fill_rect(r);
+        let mut grid = Grid {
+            canvas,
+            atlas,
+            cell: cell as u32,
+            origin_x: r.x(),
+            origin_y: r.y(),
+        };
+        let end = line.len().min(scroll + cols);
+        if scroll < end {
+            grid.codes(0, 0, &line[scroll..end], c.text);
+        }
+        if let Some((a, b)) = e.selection() {
+            let (s0, s1) = (a.col.max(scroll), b.col.min(scroll + cols));
+            for (x, &code) in (s0..s1).map(|c| c - scroll).zip(&line[s0..s1.max(s0)]) {
+                grid.fill(x, 0, 1, c.selection);
+                grid.codes(x, 0, &[code], c.selection_text);
+            }
+        }
+        if focused && cursor >= scroll && cursor < scroll + cols {
+            let code = line
+                .get(cursor)
+                .copied()
+                .unwrap_or(self.spec.machine.space());
+            grid.fill(cursor - scroll, 0, 1, c.text);
+            grid.codes(cursor - scroll, 0, &[code], c.background);
         }
     }
 
@@ -328,10 +444,14 @@ impl App {
             "Menus  Option+F / E / O / H, or F10\n\
              \u{2318}N / O / S  New / Open / Save\n\
              \u{21E7}\u{2318}S  Save As\n\
-             \u{2318}P  Print\n\
+             \u{2318}P  Print to PDF\n\
              \u{2318}Z / \u{21E7}\u{2318}Z  Undo / Redo\n\
              \u{2318}X / C / V  Cut / Copy / Paste\n\
              \u{2318}A  Select all\n\
+             \u{2318}F  Find (and replace)\n\
+             \u{2318}G / \u{21E7}\u{2318}G  Find next / previous\n\
+             \u{2325}\u{2318}F  Replace\n\
+             \u{2318}L  Go to line number\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
              \u{2318}\u{2191} / \u{2318}\u{2193}  Start / end of file\n\
              \u{2318}\u{2190} / \u{2318}\u{2192}  Start / end of line\n\
@@ -342,10 +462,14 @@ impl App {
             "Menus  Alt+F / Alt+E / Alt+O / Alt+H, or F10\n\
              Ctrl+N / O / S  New / Open / Save\n\
              Ctrl+Shift+S  Save As\n\
-             Ctrl+P  Print\n\
+             Ctrl+P  Print to PDF\n\
              Ctrl+Z / Ctrl+Y  Undo / Redo\n\
              Ctrl+X / C / V  Cut / Copy / Paste\n\
              Ctrl+A  Select all\n\
+             Ctrl+F  Find (and replace)\n\
+             F3 / Shift+F3  Find next / previous\n\
+             Ctrl+H  Replace\n\
+             Ctrl+G  Go to line number\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
              Ctrl+Home / End  Start / end of file\n\
              Ctrl+ + / -  Zoom in / out\n\

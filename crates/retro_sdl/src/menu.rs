@@ -19,6 +19,8 @@ pub enum Command {
     SaveListingAs,
     Export,
     Print,
+    /// Open the `n`th recent file.
+    OpenRecent(u8),
     Quit,
     Undo,
     Redo,
@@ -26,6 +28,11 @@ pub enum Command {
     Copy,
     Paste,
     SelectAll,
+    Find,
+    FindNext,
+    FindPrevious,
+    Replace,
+    GoToLine,
     ToggleWrap,
     ZoomIn,
     ZoomOut,
@@ -40,7 +47,7 @@ pub enum Command {
 }
 
 pub struct Item {
-    pub label: &'static str,
+    pub label: std::borrow::Cow<'static, str>,
     pub shortcut: &'static str,
     /// `None` draws a separator line.
     pub command: Option<Command>,
@@ -58,6 +65,14 @@ pub fn shortcut_text(s: &str) -> String {
     if !cfg!(target_os = "macos") {
         return s.to_string();
     }
+    // Mac equivalents of keys that aren't simply Ctrl -> Command.
+    match s {
+        "F3" => return "\u{2318}G".into(),
+        "Shift+F3" => return "\u{21E7}\u{2318}G".into(),
+        "Ctrl+H" => return "\u{2325}\u{2318}F".into(),
+        "Ctrl+G" => return "\u{2318}L".into(),
+        _ => {}
+    }
     let Some(rest) = s.strip_prefix("Ctrl+") else {
         return s.to_string();
     };
@@ -72,14 +87,14 @@ pub fn shortcut_text(s: &str) -> String {
 
 const fn item(label: &'static str, shortcut: &'static str, c: Command) -> Item {
     Item {
-        label,
+        label: std::borrow::Cow::Borrowed(label),
         shortcut,
         command: Some(c),
     }
 }
 
 const SEP: Item = Item {
-    label: "",
+    label: std::borrow::Cow::Borrowed(""),
     shortcut: "",
     command: None,
 };
@@ -87,7 +102,7 @@ const SEP: Item = Item {
 /// The menus. `alt_charset` names the machine's second character set, if
 /// it has one, for a toggle in the Options menu. In labels, `&` marks the
 /// hot key (underlined; pressing it chooses the item while the menu is open).
-pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
+pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> {
     use Command::*;
     let mut m = vec![
         Menu {
@@ -103,8 +118,9 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
                 item("Save &Listing As...", "", SaveListingAs),
                 item("&Export...", "", Export),
                 SEP,
-                item("&Print...", "Ctrl+P", Print),
+                item("&Print to PDF...", "Ctrl+P", Print),
                 SEP,
+                // (Recent files are inserted here.)
                 item("&Quit", "Ctrl+Q", Quit),
             ],
         },
@@ -147,7 +163,63 @@ pub fn menus(alt_charset: Option<&'static str>) -> Vec<Menu> {
     if let Some(label) = alt_charset {
         m[2].items.insert(4, item(label, "F6", ToggleCharset));
     }
+    // Find and Go to Line, in the Edit menu only (not the right-click one).
+    m[1].items.extend([
+        SEP,
+        item("&Find...", "Ctrl+F", Find),
+        item("Find &Next", "F3", FindNext),
+        item("Find Pre&vious", "Shift+F3", FindPrevious),
+        item("R&eplace...", "Ctrl+H", Replace),
+        item("&Go to Line...", "Ctrl+G", GoToLine),
+    ]);
+    // Recent files, numbered, above Quit.
+    if !recent.is_empty() {
+        let quit = m[0].items.len() - 1;
+        let mut items: Vec<Item> = recent_labels(recent)
+            .into_iter()
+            .enumerate()
+            .map(|(i, label)| Item {
+                label: std::borrow::Cow::Owned(label),
+                shortcut: "",
+                command: Some(OpenRecent(i as u8)),
+            })
+            .collect();
+        items.push(SEP);
+        m[0].items.splice(quit..quit, items);
+    }
     m
+}
+
+/// "&1 PROG.BAS" for each recent file, adding the folder's name where two
+/// files share a name.
+fn recent_labels(recent: &[String]) -> Vec<String> {
+    let name = |p: &str| {
+        std::path::Path::new(p)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string())
+    };
+    recent
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let n = name(p);
+            let shared = recent.iter().filter(|q| name(q) == n).count() > 1;
+            // `&&` shows a literal & in a label... names rarely have one;
+            // drop it rather than mark a hot key.
+            let n = n.replace('&', "");
+            if shared {
+                let dir = std::path::Path::new(p)
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("&{} {n}  ({dir})", i + 1)
+            } else {
+                format!("&{} {n}", i + 1)
+            }
+        })
+        .collect()
 }
 
 fn edit_items() -> Vec<Item> {
@@ -351,7 +423,7 @@ fn draw_dropdown(
     let label_w = menu
         .items
         .iter()
-        .map(|it| font.measure(&plain(it.label)))
+        .map(|it| font.measure(&plain(&it.label)))
         .max()
         .unwrap_or(0);
     let short_w = menu
@@ -411,7 +483,7 @@ fn draw_dropdown(
                 let _ = canvas.draw_line((cx + u, cy + u + d), (cx + u * 3, cy - u + d));
             }
         }
-        draw_label(canvas, font, left + pad / 2 + check_w, ty, it.label, color);
+        draw_label(canvas, font, left + pad / 2 + check_w, ty, &it.label, color);
         let shortcut = shortcut_text(it.shortcut);
         let sw = font.measure(&shortcut);
         font.draw(canvas, left + w - pad - sw, ty, &shortcut, color);
