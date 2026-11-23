@@ -106,7 +106,9 @@ dialect is recognized from the file itself.
   Save As picks the format from the extension you give, asking which BASIC
   for `.BAS`. File > Save Listing As always saves ATASCII text (a `.LST`
   listing), whatever the name. Lines with syntax errors are saved, if you
-  agree, as `ERROR-` lines, as Atari BASIC itself stores them.
+  agree, as `ERROR-` lines, as Atari BASIC itself stores them. A line
+  that would be over 255 bytes tokenized (the most a BASIC or MAC/65 line
+  can hold) stops the save, with a message listing the lines to shorten.
 - **Exporting**: File > Export writes the document as PC text, with the
   PC's line endings, in one of three forms:
   - *Atari Font*: UTF-8, with printable ASCII as itself and every other Atari

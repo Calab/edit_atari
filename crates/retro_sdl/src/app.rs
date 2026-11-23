@@ -509,6 +509,13 @@ impl App {
                 .flat_map(|e| [e.to_ascii_uppercase(), e.to_ascii_lowercase()])
                 .collect()
         };
+        // The macOS Open panel has no file-type menu: it would only allow
+        // the listed extensions, hiding files with none (often the case
+        // for Atari Logo files). Show every file there instead.
+        if !for_save && cfg!(target_os = "macos") {
+            let d = rfd::FileDialog::new().set_title(title);
+            return self.in_start_dir(d, for_save);
+        }
         let all: Vec<&str> = self
             .spec
             .file_types
@@ -577,10 +584,14 @@ impl App {
                 self.in_start_dir(d, true)
             }
             FileJobKind::Import => {
-                let d = rfd::FileDialog::new()
-                    .set_title("Import")
-                    .add_filter("Text files (.txt)", &["txt", "TXT"])
-                    .add_filter("All files", &["*"]);
+                let d = rfd::FileDialog::new().set_title("Import");
+                // Every file on macOS (see `file_dialog`).
+                let d = if cfg!(target_os = "macos") {
+                    d
+                } else {
+                    d.add_filter("Text files (.txt)", &["txt", "TXT"])
+                        .add_filter("All files", &["*"])
+                };
                 self.in_start_dir(d, false)
             }
             FileJobKind::Folder => {
@@ -826,7 +837,18 @@ impl App {
         let encoded = match save.format.encode(&self.editor.doc) {
             Ok(e) => e,
             Err(e) => {
-                self.message = Some(format!("Save failed: {e}"));
+                // The format can't hold the program as it is: say why, in
+                // a dialog rather than the easily missed status bar.
+                let name = save.path.file_name().unwrap_or_default().to_string_lossy();
+                self.dialog = Some(Dialog::notice(
+                    &format!("Can't save {name}"),
+                    &format!(
+                        "{name} wasn't saved as {}.\n\n{}",
+                        save.format.name(),
+                        sentence(&e)
+                    ),
+                ));
+                self.message = Some("Not saved".into());
                 return;
             }
         };
@@ -888,7 +910,7 @@ impl App {
     fn dialog_choose(&mut self, button: usize) {
         let Some(d) = self.dialog.take() else { return };
         match d.purpose {
-            Purpose::About => {}
+            Purpose::About | Purpose::Notice => {}
             Purpose::SaveChanges(after) => match button {
                 0 => self.save(Some(after)),
                 1 => self.perform(after),
@@ -2134,6 +2156,19 @@ fn numpad_navigation(k: Keycode) -> Option<Keycode> {
 
 /// Write to a temporary file next to `path`, then rename over it, so a
 /// failed write never leaves a half-written file.
+/// A message as a sentence: capital first letter, full stop at the end.
+fn sentence(s: &str) -> String {
+    let mut c = s.chars();
+    let mut out: String = match c.next() {
+        Some(first) => first.to_uppercase().chain(c).collect(),
+        None => return String::new(),
+    };
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
+}
+
 /// Open a file in the system's viewer for its type, without waiting.
 fn open_in_viewer(path: &Path) -> std::io::Result<()> {
     let program = if cfg!(windows) {

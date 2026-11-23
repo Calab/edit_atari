@@ -209,6 +209,7 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
 
     let mut body = Vec::new();
     let mut errors = Vec::new();
+    let mut too_long = Vec::new();
     for &(number, line) in &numbered {
         let tokens = match tokenize_line(line) {
             Ok(t) => t,
@@ -219,13 +220,15 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
         };
         let len = tokens.len() + 3;
         if len > 255 {
-            return Err(format!(
-                "line {number} is too long ({len} bytes; the limit is 255)"
-            ));
+            too_long.push((number, len));
+            continue;
         }
         body.extend_from_slice(&number.to_le_bytes());
         body.push(len as u8);
         body.extend(tokens);
+    }
+    if !too_long.is_empty() {
+        return Err(crate::tokenize::too_long_message(&too_long));
     }
     let size = u16::try_from(body.len()).map_err(|_| "program too large".to_string())?;
     let mut f = vec![0xFE, 0xFE];
@@ -697,6 +700,14 @@ fn operand<'a>(d: &'a [u8], out: &mut Vec<u8>) -> Result<Option<&'a [u8]>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_lines_block_the_save() {
+        let long = format!("10  .BYTE {}1", "1,".repeat(130)).into_bytes();
+        let e = encode(&[long, b"20  RTS".to_vec()]).unwrap_err();
+        assert!(e.starts_with("1 line is too long"), "{e}");
+        assert!(e.contains("Line 10 is "), "{e}");
+    }
 
     /// A MAC/65 file from lines of (number, tokens).
     fn file(lines: &[(u16, &[u8])]) -> Vec<u8> {

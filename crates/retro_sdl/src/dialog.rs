@@ -24,6 +24,8 @@ pub enum After {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
     About,
+    /// A message with an OK button, e.g. why a save couldn't be done.
+    Notice,
     /// "Save changes?" before doing something that discards the document.
     SaveChanges(After),
     /// Choose a format to read the current file in; the buttons are the
@@ -61,6 +63,19 @@ impl Dialog {
         Self {
             purpose: Purpose::About,
             title: format!("About {title}"),
+            text: text.into(),
+            buttons: vec!["OK"],
+            focus: 0,
+            cancel: 0,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// A message with an OK button.
+    pub fn notice(title: &str, text: &str) -> Self {
+        Self {
+            purpose: Purpose::Notice,
+            title: title.into(),
             text: text.into(),
             buttons: vec!["OK"],
             focus: 0,

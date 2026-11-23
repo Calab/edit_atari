@@ -376,6 +376,7 @@ pub fn tokenize_with_variables(
     let mut vars = Variables { names };
     let mut statements = Vec::new();
     let mut error_lines = Vec::new();
+    let mut too_long = Vec::new();
     for &(number, text) in &numbered {
         let body = match Parser::new(d, &g, text, &mut vars).line() {
             Ok(body) => body,
@@ -386,13 +387,15 @@ pub fn tokenize_with_variables(
         };
         let len = body.len() + 3;
         if len > 255 {
-            return Err(format!(
-                "line {number} is too long to tokenize ({len} bytes; the limit is 255)"
-            ));
+            too_long.push((number, len));
+            continue;
         }
         statements.extend_from_slice(&number.to_le_bytes());
         statements.push(len as u8);
         statements.extend(body);
+    }
+    if !too_long.is_empty() {
+        return Err(too_long_message(&too_long));
     }
     if vars.names.len() > g.max_variables {
         return Err(format!(
@@ -405,6 +408,28 @@ pub fn tokenize_with_variables(
         bytes: assemble(&vars.names, &statements),
         error_lines,
     })
+}
+
+/// Why a save can't go ahead: these lines (number, tokenized length) are
+/// over the 255 bytes a tokenized line can hold.
+pub(crate) fn too_long_message(lines: &[(u16, usize)]) -> String {
+    const SHOWN: usize = 8;
+    let mut s = if lines.len() == 1 {
+        "1 line is too long. A tokenized line can be at most 255 bytes:\n".to_string()
+    } else {
+        format!(
+            "{} lines are too long. A tokenized line can be at most 255 bytes:\n",
+            lines.len()
+        )
+    };
+    for (number, len) in lines.iter().take(SHOWN) {
+        s += &format!("\n    Line {number} is {len} bytes.");
+    }
+    if lines.len() > SHOWN {
+        s += &format!("\n    ...and {} more.", lines.len() - SHOWN);
+    }
+    s += "\n\nShorten or split these lines, then save again.";
+    s
 }
 
 fn trim_start(s: &[u8]) -> &[u8] {
@@ -1159,6 +1184,20 @@ mod tests {
     use super::*;
     use crate::basic::{ATARI_BASIC_FILE, format_number};
     use retro_core::FileFormat;
+
+    #[test]
+    fn every_long_line_is_reported() {
+        // Each number is 7 bytes tokenized, so these lines are far too long.
+        let long = |n: u32| format!("{n} PRINT {}1", "1+".repeat(40)).into_bytes();
+        let lines = vec![long(10), b"20 PRINT".to_vec(), long(30)];
+        let e = tokenize(&crate::basic::ATARI_BASIC, &lines).unwrap_err();
+        assert!(e.starts_with("2 lines are too long"), "{e}");
+        assert!(
+            e.contains("Line 10 is ") && e.contains("Line 30 is "),
+            "{e}"
+        );
+        assert!(!e.contains("Line 20"), "{e}");
+    }
 
     #[test]
     fn numbers_round_trip() {
