@@ -18,6 +18,9 @@
     <string>VERSION</string>
     <key>CFBundleVersion</key>
     <string>VERSION</string>
+    <!-- Filled in from the build's MACOSX_DEPLOYMENT_TARGET. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>MACOS_MIN</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <!-- Finder's Open With: the Atari file types, and any other file (Logo

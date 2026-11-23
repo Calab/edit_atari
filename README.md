@@ -210,12 +210,12 @@ dialect is recognized from the file itself.
 Download the package for your computer from the
 [Releases](https://github.com/Calab/edit_atari/releases) page:
 
-| Package                                      | For                              |
-|----------------------------------------------|----------------------------------|
-| `atari_editor-1.2.0-windows-x86_64.zip`      | Windows 10 and 11                |
-| `atari_editor-1.2.0-macos-apple-silicon.zip` | Macs with M1 or later chips      |
-| `atari_editor-1.2.0-macos-intel.zip`         | Older Macs with Intel processors |
-| `atari_editor-1.2.0-linux-x86_64.tar.gz`     | 64-bit Linux                     |
+| Package                                      | For                                                    |
+|----------------------------------------------|--------------------------------------------------------|
+| `atari_editor-1.2.0-windows-x86_64.zip`      | Windows 10 and 11                                      |
+| `atari_editor-1.2.0-macos-apple-silicon.zip` | Macs with M1 or later chips, macOS 11 or later         |
+| `atari_editor-1.2.0-macos-intel.zip`         | Older Macs with Intel processors, macOS 10.13 or later |
+| `atari_editor-1.2.0-linux-x86_64.tar.gz`     | 64-bit Linux                                           |
 
 - **Windows**: unzip it anywhere and run `atari_editor.exe`. To make a
   shortcut, right-click it and choose *Create shortcut* (or *Pin to Start*).

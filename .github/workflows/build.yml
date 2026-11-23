@@ -21,11 +21,19 @@ jobs:
             name: linux-x86_64
           - os: windows-latest
             name: windows-x86_64
+          # Oldest macOS each Mac build runs on: 11 is the first release for
+          # Apple Silicon; 10.13 covers most Intel Macs still in use.
           - os: macos-latest
             name: macos-apple-silicon
+            macos_min: "11.0"
           - os: macos-15-intel
             name: macos-intel
+            macos_min: "10.13"
     runs-on: ${{ matrix.os }}
+    # Rust, the C compiler and CMake (which builds the bundled SDL) all read
+    # this. Without it SDL targets the build machine's own macOS version.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_min }}
     steps:
       - uses: actions/checkout@v7
 
@@ -93,7 +101,8 @@ jobs:
               # Inside the app too, so Options > Fonts finds them wherever
               # the app is moved to.
               cp -R assets/fonts/FNT "$app/Resources/"
-              sed "s/VERSION/$version/g" packaging/macos/Info.plist > "$app/Info.plist"
+              sed -e "s/MACOS_MIN/$MACOSX_DEPLOYMENT_TARGET/g" -e "s/VERSION/$version/g" \
+                packaging/macos/Info.plist > "$app/Info.plist"
               # Ad-hoc signature (not notarized): macOS still asks the
               # first time it's opened.
               codesign --force --deep --sign - "$dir/Edit Atari.app"
