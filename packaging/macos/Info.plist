@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Atari Editor</string>
+    <string>Edit Atari</string>
     <key>CFBundleDisplayName</key>
-    <string>Atari Editor</string>
+    <string>Edit Atari</string>
     <key>CFBundleExecutable</key>
     <string>atari_editor</string>
     <key>CFBundleIconFile</key>

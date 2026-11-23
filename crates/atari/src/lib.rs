@@ -5,6 +5,7 @@ pub mod atascii;
 pub mod basic;
 pub mod case;
 pub mod click;
+pub mod fnt;
 pub mod keyboard;
 pub mod mac65;
 pub mod msbasic;
@@ -49,10 +50,13 @@ static FORMATS: &[&dyn FileFormat] = &[
     &atascii::AtasciiText,
 ];
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Atari {
     /// 0 = standard ATASCII, 1 = international.
     charset: usize,
+    /// Fonts loaded from files, in place of the built-in sets (256
+    /// characters in ATASCII order, from [`fnt::charset_from_fnt`]).
+    fonts: [Option<Vec<u8>>; 2],
 }
 
 impl Machine for Atari {
@@ -61,13 +65,23 @@ impl Machine for Atari {
     }
 
     fn glyph(&self, code: u8) -> [u8; 8] {
-        let font = if self.charset == INTERNATIONAL {
-            FONT_INTL
-        } else {
-            FONT
+        self.charset_glyph(self.charset, code)
+    }
+
+    fn charset_glyph(&self, charset: usize, code: u8) -> [u8; 8] {
+        let font: &[u8] = match &self.fonts[charset.min(1)] {
+            Some(f) => f,
+            None if charset == INTERNATIONAL => FONT_INTL,
+            None => FONT,
         };
         let i = code as usize * 8;
         font[i..i + 8].try_into().unwrap()
+    }
+
+    fn load_font(&mut self, charset: usize, file: Option<&[u8]>) -> Result<(), String> {
+        let slot = self.fonts.get_mut(charset).ok_or("no such character set")?;
+        *slot = file.map(fnt::charset_from_fnt).transpose()?;
+        Ok(())
     }
 
     fn charsets(&self) -> &'static [&'static str] {
@@ -201,6 +215,24 @@ mod tests {
         let (lines, skipped) = from_text("A{b}\r\nC\t\u{2665}", &m);
         assert_eq!(lines, vec![b"Ab".to_vec(), b"C ".to_vec()]);
         assert_eq!(skipped, 3);
+    }
+
+    #[test]
+    fn fonts_load_per_character_set() {
+        let mut m = Atari::default();
+        let builtin_a = m.glyph(b'A');
+        // A blank font for the standard set: blank characters, solid
+        // inverse ones; the international set is untouched.
+        m.load_font(0, Some(&[0u8; fnt::FNT_SIZE])).unwrap();
+        assert_eq!(m.glyph(b'A'), [0; 8]);
+        assert_eq!(m.glyph(b'A' | 0x80), [0xFF; 8]);
+        assert_ne!(m.charset_glyph(INTERNATIONAL, b'A'), [0; 8]);
+        // Not a font: an error, and nothing changes.
+        assert!(m.load_font(0, Some(&[0u8; 100])).is_err());
+        assert_eq!(m.glyph(b'A'), [0; 8]);
+        // Back to the built-in set.
+        m.load_font(0, None).unwrap();
+        assert_eq!(m.glyph(b'A'), builtin_a);
     }
 
     #[test]

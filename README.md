@@ -1,4 +1,4 @@
-# Atari Editor
+# Edit Atari
 
 A text editor for Atari 8-bit computer files, for Linux, Windows and macOS.
 It edits ATASCII text (Atari BASIC `LIST` files, Action!, Assembler Editor and
@@ -14,10 +14,13 @@ character set is built in.
 
 - Shows all 256 ATASCII characters, including graphics and inverse video.
 - Atari keyboard behaviour on a PC keyboard:
-  - **RIGHT-CTRL** acts as the Atari CONTROL key (switchable to LEFT-ALT with
-    F8), so left Ctrl stays free for editor commands. On a Mac, where the
-    commands use ⌘, the **control** key is the Atari CONTROL key
-    (switchable to left Option).
+  - **RIGHT-CTRL** acts as the Atari CONTROL key, so left Ctrl stays free
+    for editor commands. Any Ctrl or Alt key can be chosen instead: F7
+    switches between left and right, F8 between Ctrl and Alt (or set both
+    in Preferences). If the left Ctrl is the CONTROL key, the right one
+    does the editor commands. On a Mac, where the commands use ⌘, the left
+    **control** key is the Atari CONTROL key by default, and Option can be
+    chosen instead.
   - **Esc** before a key inserts that key's character instead of performing
     its action, as on the Atari: Esc then cursor-up inserts the up-arrow
     character.
@@ -37,8 +40,19 @@ character set is built in.
   shows the line's length. Change the limit or turn it off in Preferences.
 - 40-column Atari layout with the 2-column margin, or wrapping at the window
   width (F4).
-- The XL/XE key click, reproduced from the Atari OS click routine (F7 turns it
+- The XL/XE key click, reproduced from the Atari OS click routine (F5 turns it
   off).
+- A steady cursor, as on the Atari, or a flashing one (Options > Flashing
+  Cursor).
+- Atari font files (`.FNT`, 1024 bytes, as Atari font editors save them;
+  also as DOS binary-load files) can replace the standard and
+  international character sets: Options > Fonts shows each set's
+  characters, with a Browse button and a Built-in check box: ticking it
+  goes back to the built-in set, unticking it brings back the last font
+  loaded. The chosen fonts are used
+  on screen, in the Find boxes and when printing. Two fonts come with it
+  (`BIG.FNT` and `BIGINTL.FNT`, in the download's `fonts/FNT` folder, and
+  in the source's `assets/fonts/FNT`); Browse starts there.
 - Imports and exports PC text: UTF-8 for the Atari font, standard Unicode,
   or plain ASCII with `{tags}` (see [File types](#file-types)).
 - Prints with the Atari characters, by way of a PDF (File > Print to PDF).
@@ -55,7 +69,7 @@ character set is built in.
   (Control-click on a Mac), and the system's own Open and Save dialogs.
 - Drop a file on the window to open it. Drop several and the first opens
   in that window, each of the others in a new window of its own. On a Mac,
-  Finder's *Open With* offers Atari Editor for any file.
+  Finder's *Open With* offers Edit Atari for any file.
 - The File menu lists the last six files opened or saved.
 - If another program (an emulator saving through its H: device, say)
   changes the open file, the editor notices when you come back to it: it
@@ -64,8 +78,8 @@ character set is built in.
 - Several windows can be open at once; each saves only the preferences
   changed in it.
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
-  zoom, text and background colours, character set, key click, CONTROL
-  key, line length warning, attract mode, default folder (last used or a
+  zoom, text and background colours, character set, key click, flashing
+  cursor, CONTROL key, line length warning, attract mode, default folder (last used or a
   fixed one), and whether to save preferences on exit. Changes apply at
   once; "Save Preferences" writes them immediately.
 - Colours are chosen the Atari way, by hue (0-15) and luminance (0-14), from
@@ -166,13 +180,12 @@ dialect is recognized from the file itself.
   Replace replaces the found text and finds the next; Replace All is one
   Undo step. Clicking in the text gives the keys back to the document,
   leaving the panel open; Close (or Esc on its buttons) closes it.
-  Edit > Go to Line (Ctrl+G) jumps to a BASIC or MAC/65 line number, or
-  with *Editor line* ticked (and in text without line numbers) to the nth
-  line in the editor, as counted by "Ln" in the status bar. A line number
-  that isn't there goes to the next one up; one above the highest goes
-  just past that line (the start of the next line, or the end of that
-  one). An editor line past the end of the file goes to the last line. On a Mac: ⌘F,
-  ⌘G, ⇧⌘G, ⌥⌘F and ⌘L.
+  Edit > Go to Line (Ctrl+G) jumps to the nth line in the editor, as
+  counted by "Ln" in the status bar (the last line if there are fewer).
+  With *Editor line* unticked it goes by BASIC or MAC/65 line number
+  instead: a line number that isn't there goes to the next one up, and
+  one above the highest goes just past that line (the start of the next
+  line, or the end of that one). On a Mac: ⌘F, ⌘G, ⇧⌘G, ⌥⌘F and ⌘L.
 - **Importing**: File > Import reads a PC text file (any line endings,
   UTF-8 or not) as ATASCII: tags and Private Use characters become their
   Atari codes, a tab becomes the Atari TAB, and accented letters the
@@ -207,12 +220,12 @@ Download the package for your computer from the
   shortcut, right-click it and choose *Create shortcut* (or *Pin to Start*).
   The program isn't signed, so the first time Windows SmartScreen may say
   it "protected your PC": choose *More info*, then *Run anyway*.
-- **macOS**: unzip it and drag *Atari Editor* to Applications. The app
+- **macOS**: unzip it and drag *Edit Atari* to Applications. The app
   isn't notarized by Apple, so the first time macOS refuses to open it:
   open *System Settings > Privacy & Security*, scroll down and click
   *Open Anyway* (on older macOS, right-click the app and choose *Open*).
 - **Linux**: unpack it and run `./install.sh` in its folder. That puts the
-  program in `~/.local/bin` and adds *Atari Editor* to your applications
+  program in `~/.local/bin` and adds *Edit Atari* to your applications
   menu with its icon. Or just run `./atari_editor` from the folder.
 
 Each package also has the `fonts` folder with the EightBit Atari font.
@@ -257,7 +270,7 @@ cargo run -p fontgen -- icon crates/atari/src/font_atascii.bin 41 1A55A8 8CC4FF 
 
 Open the folder in VS Code and install the recommended extensions when
 prompted (rust-analyzer, CodeLLDB, Even Better TOML). Then press **F5** to
-build and run the editor on `samples/SAMPLE.LST`, or pick "Atari Editor:
+build and run the editor on `samples/SAMPLE.LST`, or pick "Edit Atari:
 choose a file" in the Run and Debug view.
 
 ## Project layout

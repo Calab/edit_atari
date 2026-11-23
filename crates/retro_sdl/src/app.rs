@@ -76,6 +76,8 @@ enum FileJobKind {
     Export(ExportKind),
     /// Save the printout as a PDF.
     SavePdf,
+    /// Choose a font file for character set `n`.
+    Font(usize),
 }
 
 /// The forms File > Export writes.
@@ -100,6 +102,7 @@ impl ExportKind {
 }
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::find_page::{self, FindPage};
+use crate::fonts_page::{self, FontsPage};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 use crate::prefs::{self, Field, Op, Prefs};
 use crate::print_page::{self, PrintPage};
@@ -181,6 +184,8 @@ pub struct App {
     pub prefs: Option<Prefs>,
     /// The Print page, when open.
     pub print: Option<PrintPage>,
+    /// The Fonts page, when open.
+    pub fonts: Option<FontsPage>,
     pub menus: Vec<Menu>,
     pub context_menu: Menu,
     pub menu: MenuState,
@@ -206,6 +211,9 @@ pub struct App {
     pub charset_changed: bool,
     /// When the user last pressed a key or used the mouse.
     last_activity: Instant,
+    /// When the flashing cursor last started its "on" half: at each key
+    /// press, typed text or click (not mouse movement).
+    flash_start: Instant,
     /// Attract mode's current colour shift, while it's running.
     pub attract: Option<u8>,
     next_attract: Instant,
@@ -264,6 +272,7 @@ impl App {
             overlay_top: 0,
             prefs: None,
             print: None,
+            fonts: None,
             menus,
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
@@ -278,6 +287,7 @@ impl App {
             dragging: false,
             charset_changed: false,
             last_activity: Instant::now(),
+            flash_start: Instant::now(),
             attract: None,
             next_attract: Instant::now(),
             rng: std::time::SystemTime::now()
@@ -342,6 +352,12 @@ impl App {
         self.attract = None;
     }
 
+    /// A key press, typed text or click: show the flashing cursor now and
+    /// start its flashing over.
+    pub fn restart_flash(&mut self) {
+        self.flash_start = Instant::now();
+    }
+
     fn random_byte(&mut self) -> u8 {
         // xorshift32
         let mut x = self.rng;
@@ -366,16 +382,30 @@ impl App {
         }
     }
 
-    /// How long the event loop may sleep before attract mode needs it.
+    /// How long the event loop may sleep before attract mode, or the
+    /// flashing cursor, needs it.
     pub fn next_wakeup(&self) -> Option<Duration> {
-        let delay = self.attract_delay()?;
         let now = Instant::now();
-        let at = if self.attract.is_some() {
-            self.next_attract
-        } else {
-            self.last_activity + delay
-        };
-        Some(at.saturating_duration_since(now))
+        let attract = self.attract_delay().map(|delay| {
+            let at = if self.attract.is_some() {
+                self.next_attract
+            } else {
+                self.last_activity + delay
+            };
+            at.saturating_duration_since(now)
+        });
+        let flash = self.config.cursor_flash.then(|| {
+            let ms = now.duration_since(self.flash_start).as_millis() as u64;
+            Duration::from_millis(CURSOR_FLASH_MS - ms % CURSOR_FLASH_MS)
+        });
+        [attract, flash].into_iter().flatten().min()
+    }
+
+    /// Whether the cursor shows now: always, unless it's flashing and in
+    /// its off half. Each key press or click starts it on.
+    pub fn cursor_visible(&self) -> bool {
+        !self.config.cursor_flash
+            || (self.flash_start.elapsed().as_millis() as u64 / CURSOR_FLASH_MS).is_multiple_of(2)
     }
 
     /// Test hook: start attract mode now.
@@ -632,6 +662,26 @@ impl App {
                 self.in_start_dir(d, true)
             }
             FileJobKind::Open => self.file_dialog("Open", false),
+            FileJobKind::Font(i) => {
+                let mut d = rfd::FileDialog::new()
+                    .set_title("Font")
+                    .add_filter("Atari fonts (.fnt)", &["fnt", "FNT"])
+                    .add_filter("All files", &["*"]);
+                // Start beside the font in use, if it's a file; else in
+                // the fonts that come with the program.
+                let current = Path::new(&self.config.fonts[i])
+                    .parent()
+                    .filter(|d| d.is_dir())
+                    .map(Path::to_path_buf);
+                // Failing that, the home folder.
+                let dir = current
+                    .or_else(|| bundled_fonts(self.spec.app_id))
+                    .or_else(home_dir);
+                if let Some(dir) = dir {
+                    d = d.set_directory(dir);
+                }
+                d
+            }
             FileJobKind::SavePdf => {
                 let d = rfd::FileDialog::new()
                     .set_title("Save as PDF")
@@ -666,7 +716,7 @@ impl App {
                 | FileJobKind::SaveListingAs
                 | FileJobKind::Export { .. }
                 | FileJobKind::SavePdf => d.save_file(),
-                FileJobKind::Open | FileJobKind::Import => d.pick_file(),
+                FileJobKind::Open | FileJobKind::Import | FileJobKind::Font(_) => d.pick_file(),
                 FileJobKind::Folder => d.pick_folder(),
             });
         };
@@ -701,6 +751,13 @@ impl App {
             }
             (FileJobKind::Import, Some(path)) => self.import_path(&path),
             (FileJobKind::SavePdf, Some(path)) => self.save_pdf(&path),
+            (FileJobKind::Font(i), Some(path)) => {
+                self.set_font(i, Some(&path));
+                self.fonts = Some(FontsPage::new(self.font_sets()));
+                if let Some(p) = &mut self.fonts {
+                    p.focus_on(fonts_page::Field::Browse(i));
+                }
+            }
             (FileJobKind::Folder, Some(dir)) => {
                 self.config.default_dir = dir.to_string_lossy().into_owned();
                 self.config.dir_mode = DirMode::Fixed;
@@ -1624,6 +1681,141 @@ impl App {
         self.find_next(true, layout);
     }
 
+    // ----- fonts -----------------------------------------------------------------
+
+    /// How many character sets can have a font (at most two).
+    fn font_sets(&self) -> usize {
+        self.spec.machine.charsets().len().min(2)
+    }
+
+    /// At startup: load the font files chosen in the settings. One that
+    /// can't be read is left out (the built-in set is used), with a
+    /// message; the setting is kept, in case the file comes back.
+    pub fn load_fonts(&mut self) {
+        let mut failed = Vec::new();
+        for i in 0..self.font_sets() {
+            let path = self.config.fonts[i].clone();
+            if path.is_empty() || self.config.font_builtin[i] {
+                continue;
+            }
+            let result = std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| self.spec.machine.load_font(i, Some(&bytes)));
+            if result.is_err() {
+                failed.push(file_label(&path));
+            }
+        }
+        if !failed.is_empty() {
+            self.message = Some(format!(
+                "Font {} not loaded: using the built-in one",
+                failed.join(" and ")
+            ));
+        }
+        self.charset_changed = true;
+    }
+
+    /// Use font file `path` for character set `i`, or the built-in one.
+    fn set_font(&mut self, i: usize, path: Option<&Path>) {
+        let Some(path) = path else {
+            let _ = self.spec.machine.load_font(i, None);
+            self.config.font_builtin[i] = true;
+            self.charset_changed = true;
+            return;
+        };
+        let result = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| self.spec.machine.load_font(i, Some(&bytes)));
+        let name = file_label(&path.to_string_lossy());
+        match result {
+            Ok(()) => {
+                self.config.fonts[i] = std::path::absolute(path)
+                    .unwrap_or_else(|_| path.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned();
+                self.config.font_builtin[i] = false;
+                self.charset_changed = true;
+                self.message = Some(format!("Font: {name}"));
+            }
+            Err(e) => {
+                self.dialog = Some(Dialog::notice(
+                    "Not a font",
+                    &format!("{name} can't be used as a font:\n{e}."),
+                ));
+            }
+        }
+    }
+
+    pub fn open_fonts(&mut self) {
+        self.close_menu();
+        self.overlay = Overlay::None;
+        self.fonts = Some(FontsPage::new(self.font_sets()));
+    }
+
+    /// The values the Fonts page shows.
+    pub fn fonts_view(&self) -> fonts_page::View {
+        let machine = self.spec.machine.as_ref();
+        let names = machine.charsets();
+        let sets = (0..self.font_sets())
+            .map(|i| fonts_page::SetView {
+                name: names[i],
+                file: (!self.config.fonts[i].is_empty()).then(|| file_label(&self.config.fonts[i])),
+                builtin: self.config.font_builtin[i],
+                glyphs: (0..128u8).map(|c| machine.charset_glyph(i, c)).collect(),
+            })
+            .collect();
+        let c = self.screen_colors();
+        fonts_page::View {
+            sets,
+            background: c.background,
+            text: c.text,
+        }
+    }
+
+    fn fonts_apply(&mut self, f: fonts_page::Field) {
+        use fonts_page::Field as F;
+        match f {
+            F::Browse(i) => {
+                self.fonts = None;
+                self.start_file_job(FileJobKind::Font(i));
+            }
+            // Tick: the built-in set; untick: the font file back.
+            F::BuiltIn(i) => {
+                if self.config.font_builtin[i] {
+                    let path = PathBuf::from(&self.config.fonts[i]);
+                    if !self.config.fonts[i].is_empty() {
+                        self.set_font(i, Some(&path));
+                    }
+                } else {
+                    self.set_font(i, None);
+                    self.message = Some("Built-in font".into());
+                }
+            }
+            F::Close => self.fonts = None,
+        }
+    }
+
+    fn fonts_key(&mut self, k: Keycode, shift: bool) {
+        let Some(p) = &mut self.fonts else { return };
+        let f = p.focused();
+        match k {
+            Keycode::TAB | Keycode::RIGHT | Keycode::DOWN => {
+                p.move_focus(if shift && k == Keycode::TAB { -1 } else { 1 })
+            }
+            Keycode::LEFT | Keycode::UP => p.move_focus(-1),
+            Keycode::ESCAPE => self.fonts = None,
+            Keycode::RETURN | Keycode::KP_ENTER | Keycode::SPACE => self.fonts_apply(f),
+            _ => {}
+        }
+    }
+
+    pub fn test_open_fonts(&mut self) {
+        self.open_fonts();
+    }
+
+    pub fn test_set_font(&mut self, i: usize, path: &Path) {
+        self.set_font(i, Some(path));
+    }
+
     // ----- print page ----------------------------------------------------------
 
     pub fn open_print(&mut self) {
@@ -1746,7 +1938,13 @@ impl App {
     fn print_pdf(&self) -> (Vec<u8>, usize) {
         let s = self.print_settings();
         let lines = self.editor.doc.lines();
-        let pdf = retro_core::print::pdf(self.spec.machine.as_ref(), lines, &self.file_name(), &s);
+        let pdf = retro_core::print::pdf(
+            self.spec.machine.as_ref(),
+            lines,
+            &self.file_name(),
+            self.spec.title,
+            &s,
+        );
         (pdf, retro_core::print::page_count(lines, &s))
     }
 
@@ -1774,8 +1972,11 @@ impl App {
         self.open_print();
     }
 
+    /// Test hook: save the printout, without opening a PDF viewer.
     pub fn test_save_pdf(&mut self, path: PathBuf) {
+        let open = std::mem::replace(&mut self.config.print_open, false);
         self.save_pdf(&path);
+        self.config.print_open = open;
     }
 
     // ----- preferences page ----------------------------------------------------
@@ -1807,7 +2008,9 @@ impl App {
             charsets: self.spec.machine.charsets(),
             charset: self.spec.machine.charset(),
             key_click: self.config.key_click,
-            left_alt: self.config.control_key == ControlKey::LeftAlt,
+            cursor_flash: self.config.cursor_flash,
+            control_alt: self.config.control_key.alt,
+            control_right: self.config.control_key.right,
             warn_on: self.config.line_warning_on,
             warn_col: self.config.line_warning,
             dir_fixed: self.config.dir_mode == DirMode::Fixed,
@@ -1839,10 +2042,8 @@ impl App {
                 self.spec.machine.charset(),
                 self.spec.machine.charsets().len(),
             ),
-            Field::ControlKey => (
-                usize::from(self.config.control_key == ControlKey::LeftAlt),
-                2,
-            ),
+            Field::ControlAlt => (usize::from(self.config.control_key.alt), 2),
+            Field::ControlSide => (usize::from(self.config.control_key.right), 2),
             Field::DirMode => (usize::from(self.config.dir_mode == DirMode::Fixed), 2),
             _ => return None,
         })
@@ -1856,12 +2057,10 @@ impl App {
             (Field::Zoom, Op::Inc) => self.set_scale(self.config.scale as i32 + 1),
             (Field::Charset, Op::Choose(i)) => self.set_charset(i),
             (Field::Click, Op::Toggle) => self.config.key_click = !self.config.key_click,
-            (Field::ControlKey, Op::Choose(i)) => {
-                self.config.control_key = if i == 0 {
-                    ControlKey::RightCtrl
-                } else {
-                    ControlKey::LeftAlt
-                }
+            (Field::ControlAlt, Op::Choose(i)) => self.config.control_key.alt = i == 1,
+            (Field::ControlSide, Op::Choose(i)) => self.config.control_key.right = i == 1,
+            (Field::CursorFlash, Op::Toggle) => {
+                self.config.cursor_flash = !self.config.cursor_flash
             }
             (Field::WarnOn, Op::Toggle) => {
                 self.config.line_warning_on = !self.config.line_warning_on
@@ -1916,6 +2115,7 @@ impl App {
         let d = Config {
             last_dir: std::mem::take(&mut self.config.last_dir),
             click_volume: self.config.click_volume,
+            fonts: std::mem::take(&mut self.config.fonts),
             print_paper: self.config.print_paper,
             print_fill: self.config.print_fill,
             print_size: self.config.print_size,
@@ -2070,7 +2270,9 @@ impl App {
         let checked = match c {
             ToggleWrap => Some(self.config.wrap == WrapMode::Native),
             ToggleClick => Some(self.config.key_click),
-            ToggleControlKey => Some(self.config.control_key == ControlKey::LeftAlt),
+            ToggleCursorFlash => Some(self.config.cursor_flash),
+            ToggleControlAlt => Some(self.config.control_key.alt),
+            ToggleControlSide => Some(self.config.control_key.right),
             ToggleCharset => Some(self.spec.machine.charset() != 0),
             _ => None,
         };
@@ -2087,6 +2289,7 @@ impl App {
             || self.file_job.is_some()
             || self.prefs.is_some()
             || self.print.is_some()
+            || self.fonts.is_some()
         {
             return;
         }
@@ -2100,6 +2303,7 @@ impl App {
             SaveListingAs => self.start_file_job(FileJobKind::SaveListingAs),
             Export => self.dialog = Some(Dialog::export(&self.file_name())),
             Print => self.open_print(),
+            Fonts => self.open_fonts(),
             Find => self.open_find(false),
             Replace => self.open_find(true),
             FindNext => self.find_next(true, layout),
@@ -2147,13 +2351,26 @@ impl App {
                     if self.config.key_click { "on" } else { "off" }
                 ));
             }
-            ToggleControlKey => {
-                self.config.control_key = match self.config.control_key {
-                    ControlKey::RightCtrl => ControlKey::LeftAlt,
-                    ControlKey::LeftAlt => ControlKey::RightCtrl,
-                };
+            ToggleCursorFlash => {
+                self.config.cursor_flash = !self.config.cursor_flash;
+                self.message = Some(
+                    if self.config.cursor_flash {
+                        "Cursor flashing"
+                    } else {
+                        "Cursor steady"
+                    }
+                    .into(),
+                );
+            }
+            ToggleControlAlt | ToggleControlSide => {
+                let k = &mut self.config.control_key;
+                if c == ToggleControlAlt {
+                    k.alt = !k.alt;
+                } else {
+                    k.right = !k.right;
+                }
                 self.message = Some(format!(
-                    "CONTROL key is now {}",
+                    "Atari CONTROL key: {}",
                     self.config.control_key.label()
                 ));
             }
@@ -2255,11 +2472,28 @@ impl App {
     // ----- keyboard ------------------------------------------------------------
 
     fn atari_ctrl_mod(&self) -> Mod {
-        match self.config.control_key {
-            // The Mac's control key: either one (laptops only have a left).
-            ControlKey::RightCtrl if cfg!(target_os = "macos") => Mod::LCTRLMOD | Mod::RCTRLMOD,
-            ControlKey::RightCtrl => Mod::RCTRLMOD,
-            ControlKey::LeftAlt => Mod::LALTMOD,
+        match (self.config.control_key.alt, self.config.control_key.right) {
+            (false, false) => Mod::LCTRLMOD,
+            (false, true) => Mod::RCTRLMOD,
+            (true, false) => Mod::LALTMOD,
+            (true, true) => Mod::RALTMOD,
+        }
+    }
+
+    /// The modifier for the editor's shortcuts: Command on macOS; elsewhere
+    /// Ctrl, the left one unless that's the Atari CONTROL key.
+    fn shortcut_mod(&self) -> Mod {
+        if cfg!(target_os = "macos") {
+            Mod::LGUIMOD | Mod::RGUIMOD
+        } else if self.config.control_key
+            == (ControlKey {
+                alt: false,
+                right: false,
+            })
+        {
+            Mod::RCTRLMOD
+        } else {
+            Mod::LCTRLMOD
         }
     }
 
@@ -2277,7 +2511,7 @@ impl App {
             self.prefs_text(text);
             return false;
         }
-        if self.print.is_some() {
+        if self.print.is_some() || self.fonts.is_some() {
             return false;
         }
         // The Find panel: text goes to an Atari field the normal way.
@@ -2291,7 +2525,7 @@ impl App {
                 _ => {}
             }
         }
-        let ctrl_held = held.intersects(shortcut_mod() | self.atari_ctrl_mod());
+        let ctrl_held = held.intersects(self.shortcut_mod() | self.atari_ctrl_mod());
         let mut typed = false;
         if self.overlay == Overlay::None && !ctrl_held {
             for c in text.chars() {
@@ -2369,7 +2603,7 @@ impl App {
             _ => (k, m),
         };
         let atari_ctrl = m.intersects(self.atari_ctrl_mod());
-        let editor_ctrl = m.intersects(shortcut_mod()) && !atari_ctrl;
+        let editor_ctrl = m.intersects(self.shortcut_mod()) && !atari_ctrl;
         let shift = m.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
         let alt = m.intersects(Mod::LALTMOD | Mod::RALTMOD) && !atari_ctrl;
         let layout = &ctx.frame.layout;
@@ -2408,6 +2642,11 @@ impl App {
         }
         if self.print.is_some() {
             self.print_key(k, shift);
+            self.swallow_text = true;
+            return false;
+        }
+        if self.fonts.is_some() {
+            self.fonts_key(k, shift);
             self.swallow_text = true;
             return false;
         }
@@ -2560,8 +2799,9 @@ impl App {
             Keycode::F2 => Some(Command::Save),
             Keycode::F4 => Some(Command::ToggleWrap),
             Keycode::F6 => Some(Command::ToggleCharset),
-            Keycode::F7 => Some(Command::ToggleClick),
-            Keycode::F8 => Some(Command::ToggleControlKey),
+            Keycode::F5 => Some(Command::ToggleClick),
+            Keycode::F7 => Some(Command::ToggleControlSide),
+            Keycode::F8 => Some(Command::ToggleControlAlt),
             Keycode::F9 => {
                 self.open_prefs(Field::WarnOn);
                 return false;
@@ -2668,6 +2908,13 @@ impl App {
             }
             return;
         }
+        if let Some(p) = &mut self.fonts {
+            if let Some((field, _)) = p.hit(x, y) {
+                p.focus_on(field);
+                self.fonts_apply(field);
+            }
+            return;
+        }
         // The Find panel stays open while clicking in the text.
         if self.find_click(x, y, shift, f) {
             return;
@@ -2695,6 +2942,7 @@ impl App {
         if self.overlay != Overlay::None
             || self.prefs.is_some()
             || self.print.is_some()
+            || self.fonts.is_some()
             || y < f.text_top
             || y >= f.status_top
         {
@@ -2827,18 +3075,53 @@ fn word_key(k: Keycode, editor_ctrl: bool, m: Mod) -> Option<EditAction> {
     }
 }
 
+/// The folder of Atari fonts that comes with the program, if there is
+/// one: `fonts/FNT` beside the program (the Windows and Linux packages),
+/// inside the Mac app (`Contents/Resources/FNT`), where the Linux
+/// installer puts them (`~/.local/share/<app>/fonts`), or, for a build
+/// run from the source (`target/debug` or `target/release`), the
+/// source's `assets/fonts/FNT`.
+fn bundled_fonts(app_id: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    [
+        Some(dir.join("fonts/FNT")),
+        Some(dir.join("../Resources/FNT")),
+        data.map(|d| d.join(app_id).join("fonts")),
+        Some(dir.join("../../assets/fonts/FNT")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|d| d.is_dir())
+    .map(|d| d.canonicalize().unwrap_or(d))
+}
+
+/// The user's home folder (`HOME`, or `USERPROFILE` on Windows).
+fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .find(|d| d.is_dir())
+}
+
+/// A file's name from its path, for messages.
+fn file_label(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// How long a flashing cursor stays on, then off.
+const CURSOR_FLASH_MS: u64 = 500;
+
 /// The longest Find or Replace text.
 const FIELD_MAX: usize = 120;
-
-/// The modifier for the editor's shortcuts: Command on macOS, left Ctrl
-/// elsewhere (right Ctrl is the Atari CONTROL key there by default).
-fn shortcut_mod() -> Mod {
-    if cfg!(target_os = "macos") {
-        Mod::LGUIMOD | Mod::RGUIMOD
-    } else {
-        Mod::LCTRLMOD
-    }
-}
 
 /// A message as a sentence: capital first letter, full stop at the end.
 fn sentence(s: &str) -> String {

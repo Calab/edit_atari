@@ -27,7 +27,9 @@ pub enum Field {
     ResetColors,
     Charset,
     Click,
-    ControlKey,
+    CursorFlash,
+    ControlAlt,
+    ControlSide,
     WarnOn,
     WarnCol,
     AttractOn,
@@ -49,7 +51,15 @@ fn order(colors: bool) -> Vec<Field> {
     if colors {
         v.extend([FgHue, FgLum, BgHue, BgLum, BrdHue, BrdLum, ResetColors]);
     }
-    v.extend([Charset, Click, ControlKey, WarnOn, WarnCol]);
+    v.extend([
+        Charset,
+        Click,
+        CursorFlash,
+        ControlAlt,
+        ControlSide,
+        WarnOn,
+        WarnCol,
+    ]);
     if colors {
         v.extend([AttractOn, AttractMin]);
     }
@@ -70,7 +80,9 @@ pub struct View<'a> {
     pub charsets: &'a [&'a str],
     pub charset: usize,
     pub key_click: bool,
-    pub left_alt: bool,
+    pub cursor_flash: bool,
+    pub control_alt: bool,
+    pub control_right: bool,
     pub warn_on: bool,
     pub warn_col: usize,
     pub dir_fixed: bool,
@@ -208,13 +220,23 @@ impl Prefs {
                 Row::Click => {
                     ui.checkbox(Field::Click, cx, y, "On", v.key_click);
                 }
+                Row::Cursor => {
+                    ui.checkbox(Field::CursorFlash, cx, y, "Flashing", v.cursor_flash);
+                }
                 Row::ControlKey => {
-                    ui.choice(
-                        Field::ControlKey,
+                    let end = ui.choice(
+                        Field::ControlAlt,
                         cx,
                         y,
-                        &[ControlKey::RightCtrl.label(), ControlKey::LeftAlt.label()],
-                        usize::from(v.left_alt),
+                        &control_modifiers(),
+                        usize::from(v.control_alt),
+                    );
+                    ui.choice(
+                        Field::ControlSide,
+                        end + pad * 8,
+                        y,
+                        &control_sides(),
+                        usize::from(v.control_right),
                     );
                 }
                 Row::Warn => {
@@ -309,6 +331,7 @@ enum Row {
     Border,
     Charset,
     Click,
+    Cursor,
     ControlKey,
     Warn,
     Attract,
@@ -328,6 +351,7 @@ fn rows(colors: bool) -> Vec<(&'static str, Row)> {
     rows.extend([
         ("Character set", Row::Charset),
         ("Key click", Row::Click),
+        ("Cursor", Row::Cursor),
         ("CONTROL key", Row::ControlKey),
         ("Line length warning", Row::Warn),
     ]);
@@ -353,6 +377,18 @@ fn label_width(font: &mut UiFont, rows: &[(&str, Row)]) -> i32 {
 }
 
 const RESET_COLORS: &str = "Default";
+
+/// The CONTROL key choices: which modifier, and which side.
+fn control_modifiers() -> [&'static str; 2] {
+    [
+        ControlKey::modifier_label(false),
+        ControlKey::modifier_label(true),
+    ]
+}
+
+fn control_sides() -> [&'static str; 2] {
+    [ControlKey::side_label(false), ControlKey::side_label(true)]
+}
 
 /// The page's full size in pixels, before any clipping to the window:
 /// wide enough for its widest row.
@@ -416,10 +452,10 @@ fn row_width(font: &mut UiFont, p: i32, v: &View, row: &Row) -> i32 {
         }
         Row::Charset => choice(font, v.charsets),
         Row::Click => checkbox(font, "On"),
-        Row::ControlKey => choice(
-            font,
-            &[ControlKey::RightCtrl.label(), ControlKey::LeftAlt.label()],
-        ),
+        Row::Cursor => checkbox(font, "Flashing"),
+        Row::ControlKey => {
+            choice(font, &control_modifiers()) + p * 8 + choice(font, &control_sides())
+        }
         Row::Warn => checkbox(font, "On") + p * 6 + font.measure("after column") + spinner(font, 4),
         Row::Attract => {
             checkbox(font, "On")

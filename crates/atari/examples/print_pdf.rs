@@ -23,5 +23,5 @@ fn main() {
         .file_name()
         .unwrap()
         .to_string_lossy();
-    std::fs::write(&args[2], pdf(&atari, &lines, &name, &s)).unwrap();
+    std::fs::write(&args[2], pdf(&atari, &lines, &name, "Edit Atari", &s)).unwrap();
 }

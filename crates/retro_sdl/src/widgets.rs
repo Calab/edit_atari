@@ -92,18 +92,39 @@ impl<F: Copy + PartialEq> Ui<'_, '_, '_, F> {
 
     /// A check box with a label. Returns the x after the label.
     pub fn checkbox(&mut self, f: F, x: i32, y: i32, label: &str, on: bool) -> i32 {
+        self.checkbox_if(f, x, y, label, on, true)
+    }
+
+    /// A check box that can be greyed out (`enabled` false): drawn dim,
+    /// and not clickable or focusable.
+    pub fn checkbox_if(
+        &mut self,
+        f: F,
+        x: i32,
+        y: i32,
+        label: &str,
+        on: bool,
+        enabled: bool,
+    ) -> i32 {
         let t = &THEME;
+        // A greyed box keeps its tick, dimmed.
+        let tick = if enabled { t.highlight } else { t.dim };
         let s = self.lh * 2 / 3;
         let by = y + (self.lh - s) / 2;
         let b = Rect::new(x, by, s as u32, s as u32);
         self.canvas.set_draw_color(if on {
-            t.highlight
+            tick
         } else {
             Color::RGB(0xFF, 0xFF, 0xFF)
         });
         let _ = self.canvas.fill_rect(b);
-        self.canvas
-            .set_draw_color(if on { t.highlight } else { t.border });
+        self.canvas.set_draw_color(if on {
+            tick
+        } else if enabled {
+            t.border
+        } else {
+            t.dim
+        });
         let _ = self.canvas.draw_rect(b);
         if on {
             let u = (s / 6).max(2);
@@ -116,16 +137,19 @@ impl<F: Copy + PartialEq> Ui<'_, '_, '_, F> {
                     .draw_line((cx + u, cy + u + d), (cx + u * 3, cy - u + d));
             }
         }
+        let color = if enabled { t.text } else { t.dim };
         let lw = self
             .font
-            .draw(self.canvas, x + s + self.pad * 2, y, label, t.text);
+            .draw(self.canvas, x + s + self.pad * 2, y, label, color);
         let end = x + s + self.pad * 2 + lw;
-        self.hits.push((
-            Rect::new(x, y, (end - x) as u32, self.lh as u32),
-            f,
-            Op::Toggle,
-        ));
-        self.ring(f, x, y, end);
+        if enabled {
+            self.hits.push((
+                Rect::new(x, y, (end - x) as u32, self.lh as u32),
+                f,
+                Op::Toggle,
+            ));
+            self.ring(f, x, y, end);
+        }
         end
     }
 

@@ -3,6 +3,7 @@
 .DS_Store
 /out
 rust commands.txt
+notes.txt
 /tmp
 /samples/Atari BASIC**
 /samples/Turbo BASIC XL**
@@ -13,5 +14,4 @@ rust commands.txt
 /samples/MAC-65**
 /samples/Atari Logo**
 /samples/Atari Pilot**
-
 /samples/Altirra BASIC**

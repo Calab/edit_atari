@@ -8,6 +8,7 @@ use sdl2::render::{Canvas, Texture};
 use sdl2::video::Window;
 
 use crate::app::{App, Frame, Overlay};
+use crate::config::ControlKey;
 use crate::find_page;
 use crate::menu::{self, THEME};
 use crate::render::Grid;
@@ -107,6 +108,18 @@ impl App {
             );
             self.prefs = Some(p);
         }
+        if let Some(mut p) = self.fonts.take() {
+            let cell = 8 * (2.0 * self.ratio).round().max(1.0) as i32;
+            p.draw(
+                canvas,
+                small,
+                &self.fonts_view(),
+                (f.width, f.height),
+                self.prefs_pad,
+                cell,
+            );
+            self.fonts = Some(p);
+        }
         if let Some(mut p) = self.print.take() {
             p.draw(
                 canvas,
@@ -201,7 +214,7 @@ impl App {
                 grid.codes(x, 0, &[code], c.selection_text);
             }
         }
-        if focused && cursor >= scroll && cursor < scroll + cols {
+        if focused && self.cursor_visible() && cursor >= scroll && cursor < scroll + cols {
             let code = line
                 .get(cursor)
                 .copied()
@@ -281,7 +294,8 @@ impl App {
             (fg, bg)
         };
         let (crow, cx) = layout.locate(doc, cur);
-        if crow >= self.editor.top && crow < self.editor.top + layout.rows {
+        if self.cursor_visible() && crow >= self.editor.top && crow < self.editor.top + layout.rows
+        {
             let screen = crow - self.editor.top;
             let code = doc
                 .line(cur.line)
@@ -369,7 +383,7 @@ impl App {
 
         let left = match &self.message {
             _ if self.overlay != Overlay::None => {
-                "Esc closes  \u{b7}  arrows, Page Up/Down or the mouse wheel scroll".into()
+                "Esc closes  \u{b7}  arrows, Page Up/Down, scroll".into()
             }
             Some(m) => m.clone(),
             None => format!(
@@ -438,7 +452,10 @@ impl App {
     }
 
     fn help_text(&self) -> String {
-        let ctrl = self.config.control_key.label();
+        let (ctrl_key, alt_key) = (
+            ControlKey::modifier_label(false),
+            ControlKey::modifier_label(true),
+        );
         // The editor's own shortcuts: Command on macOS, Ctrl elsewhere.
         let shortcuts = if cfg!(target_os = "macos") {
             "Menus  Option+F / E / O / H, or F10\n\
@@ -468,7 +485,6 @@ impl App {
              Ctrl+X / C / V  Cut / Copy / Paste\n\
              Ctrl+A  Select all\n\
              Ctrl+F  Find (and replace)\n\
-             F3 / Shift+F3  Find next / previous\n\
              Ctrl+H  Replace\n\
              Ctrl+G  Go to line number\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
@@ -483,12 +499,16 @@ impl App {
              {shortcuts}\
              Drop files on the window to open them (one per window).\n\
              \n\
+             F1  This keyboard help\n\
+             F2  Save\n\
+             F3 / Shift+F3  Find next / previous\n\
              F4  40 columns / window width\n\
-             `  Inverse video on/off (the Atari key; left of 1)\n\
+             F5  Key click on/off\n\
              F6  Standard / international character set\n\
-             F7  Key click on/off\n\
-             F8  CONTROL key ({ctrl})\n\
-             F9  Line length warning (Preferences)\n\
+             F7  CONTROL key on left/right side toggle\n\
+             F8  CONTROL on {ctrl_key}/{alt_key} toggle\n\
+             F9  Preferences\n\
+             F10  Menus\n\
              \n\
              Insert  Insert / overwrite mode\n\
              Shift+Insert  Insert line\n\

@@ -7,6 +7,7 @@ mod app;
 pub mod config;
 mod dialog;
 mod find_page;
+mod fonts_page;
 pub mod menu;
 mod prefs;
 mod print_page;
@@ -50,7 +51,7 @@ fn window_icon(spec: &AppSpec) -> Option<sdl2::surface::Surface<'static>> {
 
 /// Everything that makes an editor specific to one machine.
 pub struct AppSpec {
-    /// Window title, e.g. "Atari Editor".
+    /// Program name and window title, e.g. "Edit Atari".
     pub title: &'static str,
     /// Folder name for settings, e.g. "atari_editor".
     pub app_id: &'static str,
@@ -108,6 +109,8 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     if let Some(icon) = window_icon(&app.spec) {
         window.set_icon(icon);
     }
+    // Fonts chosen in the settings, now that the icon has the built-in A.
+    app.load_fonts();
     let mut canvas = window
         .into_canvas()
         .present_vsync()
@@ -221,6 +224,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             app.test_open_print();
             app::Overlay::None
         }
+        Ok("fonts") => {
+            app.test_open_fonts();
+            app::Overlay::None
+        }
         Ok("export") => {
             app.test_export_dialog();
             app::Overlay::None
@@ -282,6 +289,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     app.text_input(&c.to_string(), Mod::NOMOD, &frame.layout);
                 }
             }
+        }
+    }
+    // Fonts to use: "standard.fnt" or "standard.fnt,international.fnt".
+    if let Ok(list) = std::env::var("RETRO_EDITOR_FONTS") {
+        for (i, path) in list.split(',').enumerate().filter(|(_, p)| !p.is_empty()) {
+            app.test_set_font(i, std::path::Path::new(path));
         }
     }
     // Go to this line number.
@@ -390,6 +403,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     | Event::MouseWheel { .. }
             ) {
                 app.activity();
+            }
+            if matches!(
+                event,
+                Event::KeyDown { .. } | Event::TextInput { .. } | Event::MouseButtonDown { .. }
+            ) {
+                app.restart_flash();
             }
             let frame = app.frame(canvas.output_size()?);
             let ctx = app::Ctx {

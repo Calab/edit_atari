@@ -37,7 +37,12 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ToggleClick,
-    ToggleControlKey,
+    ToggleCursorFlash,
+    Fonts,
+    /// The Atari CONTROL key: Ctrl or Alt.
+    ToggleControlAlt,
+    /// The Atari CONTROL key: left or right.
+    ToggleControlSide,
     Preferences,
     ToggleCharset,
     KeyHelp,
@@ -135,17 +140,20 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> 
                 item("Zoom &In", "Ctrl++", ZoomIn),
                 item("Zoom &Out", "Ctrl+-", ZoomOut),
                 SEP,
-                item("&Key Click", "F7", ToggleClick),
+                item("&Key Click", "F5", ToggleClick),
+                item("&Flashing Cursor", "", ToggleCursorFlash),
+                item("&Right-Side CONTROL Key", "F7", ToggleControlSide),
                 item(
                     if cfg!(target_os = "macos") {
-                        "LEFT-&OPTION as CONTROL Key"
+                        "OP&TION as CONTROL Key"
                     } else {
-                        "LEFT-&ALT as CONTROL Key"
+                        "&ALT as CONTROL Key"
                     },
                     "F8",
-                    ToggleControlKey,
+                    ToggleControlAlt,
                 ),
                 SEP,
+                item("Fo&nts...", "", Fonts),
                 item("&Preferences...", "Ctrl+,", Preferences),
             ],
         },

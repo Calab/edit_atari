@@ -67,6 +67,9 @@ jobs:
           cp "assets/fonts/atari/OFL.txt" "$dir/fonts/EightBit Atari OFL.txt"
           cp "assets/fonts/atari/Atari font license.txt" "$dir/fonts/"
           cp assets/fonts/ui/OFL.txt "$dir/fonts/Noto Sans OFL.txt"
+          # Atari .FNT fonts for Options > Fonts.
+          mkdir "$dir/fonts/FNT"
+          cp assets/fonts/FNT/* "$dir/fonts/FNT/"
           case "${{ runner.os }}" in
             Linux)
               cp target/release/atari_editor "$dir/"
@@ -83,14 +86,17 @@ jobs:
               echo "PACKAGE=$dir.zip" >> "$GITHUB_ENV"
               ;;
             macOS)
-              app="$dir/Atari Editor.app/Contents"
+              app="$dir/Edit Atari.app/Contents"
               mkdir -p "$app/MacOS" "$app/Resources"
               cp target/release/atari_editor "$app/MacOS/"
               cp assets/icons/atari_editor.icns "$app/Resources/"
+              # Inside the app too, so Options > Fonts finds them wherever
+              # the app is moved to.
+              cp -R assets/fonts/FNT "$app/Resources/"
               sed "s/VERSION/$version/g" packaging/macos/Info.plist > "$app/Info.plist"
               # Ad-hoc signature (not notarized): macOS still asks the
               # first time it's opened.
-              codesign --force --deep --sign - "$dir/Atari Editor.app"
+              codesign --force --deep --sign - "$dir/Edit Atari.app"
               ditto -c -k --keepParent "$dir" "$dir.zip"
               echo "PACKAGE=$dir.zip" >> "$GITHUB_ENV"
               ;;

@@ -36,6 +36,20 @@ pub trait Machine {
     /// the leftmost pixel. Inverse/reverse video is part of the glyph.
     fn glyph(&self, code: u8) -> [u8; 8];
 
+    /// The glyph for a code in character set `charset` (not necessarily
+    /// the one in use), for previews.
+    fn charset_glyph(&self, charset: usize, code: u8) -> [u8; 8] {
+        let _ = charset;
+        self.glyph(code)
+    }
+
+    /// Use a font file for character set `charset` (`None`: the built-in
+    /// one). Fails, changing nothing, if the file isn't a font.
+    fn load_font(&mut self, charset: usize, file: Option<&[u8]>) -> Result<(), String> {
+        let _ = (charset, file);
+        Err("this computer's fonts can't be changed".into())
+    }
+
     /// Names of the character sets the machine can display, e.g.
     /// `["Standard", "International"]`. The first is the default.
     fn charsets(&self) -> &'static [&'static str] {

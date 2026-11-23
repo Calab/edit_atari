@@ -9,25 +9,44 @@ use std::path::PathBuf;
 use retro_core::WrapMode;
 use retro_core::print::Paper;
 
-/// Which PC key acts as the machine's CONTROL key.
-///
-/// On macOS the shortcuts use the Command key, so `RightCtrl` there means
-/// the Mac's own control key (either one: laptops only have a left one),
-/// and `LeftAlt` the left Option key.
+/// Which PC key acts as the machine's CONTROL key: Ctrl or Alt (on a
+/// Mac, control or Option), on the left or the right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControlKey {
-    RightCtrl,
-    LeftAlt,
+pub struct ControlKey {
+    pub alt: bool,
+    pub right: bool,
 }
 
 impl ControlKey {
-    pub fn label(self) -> &'static str {
-        match (self, cfg!(target_os = "macos")) {
-            (ControlKey::RightCtrl, false) => "RIGHT-CTRL",
-            (ControlKey::LeftAlt, false) => "LEFT-ALT",
-            (ControlKey::RightCtrl, true) => "CONTROL",
-            (ControlKey::LeftAlt, true) => "LEFT-OPTION",
+    /// Right Ctrl on Windows and Linux (left Ctrl is for the editor's
+    /// shortcuts); on a Mac, whose shortcuts use Command, the left control
+    /// key (laptops have no right one).
+    pub const DEFAULT: ControlKey = ControlKey {
+        alt: false,
+        right: !cfg!(target_os = "macos"),
+    };
+
+    /// "CTRL" or "ALT" ("CONTROL" or "OPTION" on a Mac).
+    pub fn modifier_label(alt: bool) -> &'static str {
+        match (alt, cfg!(target_os = "macos")) {
+            (false, false) => "CTRL",
+            (true, false) => "ALT",
+            (false, true) => "CONTROL",
+            (true, true) => "OPTION",
         }
+    }
+
+    pub fn side_label(right: bool) -> &'static str {
+        if right { "Right" } else { "Left" }
+    }
+
+    /// E.g. "RIGHT-CTRL".
+    pub fn label(self) -> String {
+        format!(
+            "{}-{}",
+            Self::side_label(self.right).to_uppercase(),
+            Self::modifier_label(self.alt)
+        )
     }
 }
 
@@ -65,6 +84,13 @@ pub struct Config {
     pub text_color: Option<(u8, u8)>,
     pub background_color: Option<(u8, u8)>,
     pub border_color: Option<(u8, u8)>,
+    /// Flash the cursor (the Atari's doesn't).
+    pub cursor_flash: bool,
+    /// The font file last loaded for each character set (empty: none
+    /// yet), kept while the built-in set is in use.
+    pub fonts: [String; 2],
+    /// Use the built-in character set rather than the font file.
+    pub font_builtin: [bool; 2],
     /// Cycle dim colours after `attract_minutes` without input.
     pub attract_on: bool,
     pub attract_minutes: u32,
@@ -105,8 +131,8 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            control_key: ControlKey::RightCtrl,
-            wrap: WrapMode::Native,
+            control_key: ControlKey::DEFAULT,
+            wrap: WrapMode::Window,
             scale: 2,
             key_click: true,
             click_volume: 0.25,
@@ -120,38 +146,19 @@ impl Default for Config {
             text_color: None,
             background_color: None,
             border_color: None,
+            cursor_flash: false,
+            fonts: Default::default(),
+            font_builtin: [true, true],
             attract_on: true,
             attract_minutes: DEFAULT_ATTRACT_MINUTES,
-            print_paper: default_paper(),
-            print_fill: false,
+            print_paper: Paper::Letter,
+            print_fill: true,
             print_size: DEFAULT_PRINT_SIZE,
             print_header: true,
             print_open: true,
-            goto_editor_line: false,
+            goto_editor_line: true,
             recent: Vec::new(),
         }
-    }
-}
-
-/// Letter where the locale says it's used (the Americas, the Philippines),
-/// A4 elsewhere; Letter when there's no locale to go by.
-fn default_paper() -> Paper {
-    let locale = ["LC_ALL", "LC_PAPER", "LANG"]
-        .iter()
-        .filter_map(|k| std::env::var(k).ok())
-        .find(|v| !v.is_empty() && v != "C" && v != "POSIX");
-    let Some(locale) = locale else {
-        return Paper::Letter;
-    };
-    let country = locale
-        .split(['.', '@'])
-        .next()
-        .and_then(|l| l.split('_').nth(1))
-        .unwrap_or("");
-    match country {
-        "US" | "CA" | "MX" | "PH" | "CL" | "CO" | "VE" | "CR" | "GT" | "PR" => Paper::Letter,
-        "" => Paper::Letter,
-        _ => Paper::A4,
     }
 }
 
@@ -163,7 +170,7 @@ pub const MAX_LINE_WARNING: usize = 9999;
 pub const DEFAULT_ATTRACT_MINUTES: u32 = 5;
 pub const MAX_ATTRACT_MINUTES: u32 = 60;
 /// Print character sizes, in points.
-pub const DEFAULT_PRINT_SIZE: u32 = 10;
+pub const DEFAULT_PRINT_SIZE: u32 = 12;
 pub const MIN_PRINT_SIZE: u32 = 5;
 pub const MAX_PRINT_SIZE: u32 = 24;
 
@@ -210,11 +217,42 @@ impl Config {
             };
             let v = v.trim();
             match k.trim() {
+                // Before 1.2: right_ctrl or left_alt. On a Mac right_ctrl
+                // meant the control key, which laptops have on the left.
                 "control_key" => match v {
-                    "right_ctrl" => c.control_key = ControlKey::RightCtrl,
-                    "left_alt" => c.control_key = ControlKey::LeftAlt,
+                    "right_ctrl" => c.control_key = ControlKey::DEFAULT,
+                    "left_alt" => {
+                        c.control_key = ControlKey {
+                            alt: true,
+                            right: false,
+                        }
+                    }
                     _ => {}
                 },
+                "control_key_modifier" => match v {
+                    "ctrl" => c.control_key.alt = false,
+                    "alt" => c.control_key.alt = true,
+                    _ => {}
+                },
+                "control_key_side" => match v {
+                    "left" => c.control_key.right = false,
+                    "right" => c.control_key.right = true,
+                    _ => {}
+                },
+                "cursor_flash" => c.cursor_flash = v == "on",
+                // A font file means it's in use, unless the line after
+                // says built-in (settings from before that line existed
+                // had no other way to say so).
+                "font" => {
+                    c.fonts[0] = v.to_string();
+                    c.font_builtin[0] = v.is_empty();
+                }
+                "font_international" => {
+                    c.fonts[1] = v.to_string();
+                    c.font_builtin[1] = v.is_empty();
+                }
+                "font_builtin" => c.font_builtin[0] = v != "off",
+                "font_international_builtin" => c.font_builtin[1] = v != "off",
                 "wrap" => match v {
                     "native" => c.wrap = WrapMode::Native,
                     "window" => c.wrap = WrapMode::Window,
@@ -272,7 +310,7 @@ impl Config {
                 }
                 "print_header" => c.print_header = v != "off",
                 "print_open" => c.print_open = v != "off",
-                "goto_editor_line" => c.goto_editor_line = v == "on",
+                "goto_editor_line" => c.goto_editor_line = v != "off",
                 "recent" => {
                     if !v.is_empty() && c.recent.len() < MAX_RECENT {
                         c.recent.push(v.to_string());
@@ -292,8 +330,15 @@ impl Config {
     pub fn to_text(&self) -> String {
         format!(
             "# Retro editor settings\n\
-             # control_key: right_ctrl | left_alt\n\
-             control_key = {}\n\
+             # The Atari CONTROL key: ctrl | alt, on the left | right\n\
+             control_key_modifier = {}\n\
+             control_key_side = {}\n\
+             cursor_flash = {}\n\
+             # Font files (.FNT) for the standard and international sets\n\
+             font = {}\n\
+             font_builtin = {}\n\
+             font_international = {}\n\
+             font_international_builtin = {}\n\
              # wrap: native (40 columns) | window\n\
              wrap = {}\n\
              scale = {}\n\
@@ -325,10 +370,17 @@ impl Config {
              goto_editor_line = {}\n\
              # Recent files, most recent first\n\
              {}",
-            match self.control_key {
-                ControlKey::RightCtrl => "right_ctrl",
-                ControlKey::LeftAlt => "left_alt",
+            if self.control_key.alt { "alt" } else { "ctrl" },
+            if self.control_key.right {
+                "right"
+            } else {
+                "left"
             },
+            on_off(self.cursor_flash),
+            self.fonts[0],
+            on_off(self.font_builtin[0]),
+            self.fonts[1],
+            on_off(self.font_builtin[1]),
             match self.wrap {
                 WrapMode::Native => "native",
                 WrapMode::Window => "window",
@@ -391,6 +443,9 @@ impl Config {
             text_color,
             background_color,
             border_color,
+            cursor_flash,
+            fonts,
+            font_builtin,
             attract_on,
             attract_minutes,
             print_paper,
@@ -424,6 +479,9 @@ impl Config {
             text_color,
             background_color,
             border_color,
+            cursor_flash,
+            fonts,
+            font_builtin,
             attract_on,
             attract_minutes,
             print_paper,
@@ -464,7 +522,13 @@ mod tests {
     #[test]
     fn round_trips() {
         let c = Config {
-            control_key: ControlKey::LeftAlt,
+            control_key: ControlKey {
+                alt: true,
+                right: true,
+            },
+            cursor_flash: true,
+            fonts: ["/home/me/BIG.FNT".into(), "/home/me/X.FNT".into()],
+            font_builtin: [false, true],
             wrap: WrapMode::Window,
             scale: 2,
             key_click: false,
@@ -513,9 +577,62 @@ mod tests {
     }
 
     #[test]
+    fn old_control_key_settings_load() {
+        let c = Config::parse("control_key = left_alt");
+        assert_eq!(
+            c.control_key,
+            ControlKey {
+                alt: true,
+                right: false
+            }
+        );
+        assert_eq!(
+            Config::parse("control_key = right_ctrl").control_key,
+            ControlKey::DEFAULT
+        );
+    }
+
+    #[test]
+    fn older_font_settings_mean_in_use() {
+        let c = Config::parse("font = /f/BIG.FNT");
+        assert_eq!(c.font_builtin, [false, true]);
+    }
+
+    #[test]
+    fn defaults() {
+        let c = Config::default();
+        // Printing: Letter, page width, 12 point, header, open after saving.
+        assert_eq!(c.print_paper, Paper::Letter);
+        assert!(c.print_fill && c.print_header && c.print_open);
+        assert_eq!(c.print_size, 12);
+        // Preferences.
+        assert_eq!(c.scale, 2);
+        assert_eq!(
+            (c.text_color, c.background_color, c.border_color),
+            (None, None, None)
+        );
+        assert_eq!(c.charset, 0);
+        assert_eq!(c.wrap, WrapMode::Window);
+        assert!(c.key_click);
+        assert!(!c.control_key.alt);
+        assert_eq!(c.control_key.right, !cfg!(target_os = "macos"));
+        assert!(c.line_warning_on);
+        assert_eq!(c.line_warning, 114);
+        assert!(c.attract_on);
+        assert_eq!(c.attract_minutes, 5);
+        assert_eq!(c.dir_mode, DirMode::Last);
+        assert!(c.save_on_exit);
+        // Go to Line counts editor lines.
+        assert!(c.goto_editor_line);
+        // Fonts: the built-in ones, no files.
+        assert_eq!(c.fonts, [String::new(), String::new()]);
+        assert_eq!(c.font_builtin, [true, true]);
+    }
+
+    #[test]
     fn bad_values_use_defaults() {
         let c = Config::parse("control_key = shift\nscale = 99\nnonsense");
-        assert_eq!(c.control_key, ControlKey::RightCtrl);
+        assert_eq!(c.control_key, ControlKey::DEFAULT);
         assert_eq!(c.scale, MAX_SCALE);
     }
 

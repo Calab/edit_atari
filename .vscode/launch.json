@@ -4,7 +4,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Atari Editor: sample file",
+            "name": "Edit Atari: sample file",
             "type": "lldb",
             "request": "launch",
             "cargo": {
@@ -15,7 +15,7 @@
             "cwd": "${workspaceFolder}"
         },
         {
-            "name": "Atari Editor: choose a file",
+            "name": "Edit Atari: choose a file",
             "type": "lldb",
             "request": "launch",
             "cargo": {

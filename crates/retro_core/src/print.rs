@@ -92,8 +92,14 @@ pub fn page_count(lines: &[Vec<u8>], s: &PrintSettings) -> usize {
 }
 
 /// The document as a PDF. `title` goes in the header and the PDF's
-/// details.
-pub fn pdf(machine: &dyn Machine, lines: &[Vec<u8>], title: &str, s: &PrintSettings) -> Vec<u8> {
+/// details, with `producer` (the program's name).
+pub fn pdf(
+    machine: &dyn Machine,
+    lines: &[Vec<u8>],
+    title: &str,
+    producer: &str,
+    s: &PrintSettings,
+) -> Vec<u8> {
     let layout = s.layout();
     let all_rows = rows(lines, layout.columns);
     let pages: Vec<&[&[u8]]> = if all_rows.is_empty() {
@@ -198,8 +204,9 @@ pub fn pdf(machine: &dyn Machine, lines: &[Vec<u8>], title: &str, s: &PrintSetti
     w.object(
         info,
         &format!(
-            "<< /Title ({}) /Producer (Atari Editor) >>",
-            escape(&header)
+            "<< /Title ({}) /Producer ({}) >>",
+            escape(&header),
+            escape(&latin1(producer))
         ),
     );
     w.finish(info)

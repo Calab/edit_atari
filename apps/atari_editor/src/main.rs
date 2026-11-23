@@ -113,6 +113,7 @@ const FILE_TYPES: &[&str] = &[
 const HELP: &[&str] = &[
     "ATARI KEYS",
     "",
+    "`               Inverse",
     "CONTROL+letter  Control graphics ($01-$1A)",
     "CONTROL+, . ;   Heart, diamond, spade",
     "CONTROL+- =     Cursor up/down",
@@ -127,11 +128,10 @@ const HELP: &[&str] = &[
     "Esc Insert      Insert-char character",
     "Esc CONTROL+2   Bell character",
     "",
+    "Keys with no Atari equivalent ({ } ~) are ignored.",
+    "",
     "Tab stops start at screen columns 7, 15,",
     "23, 31 and 39 of each row, as at power-up.",
-    "",
-    "The ` key (left of 1) is the Atari inverse key.",
-    "Keys with no Atari equivalent ({ } ~) are ignored.",
     "",
     "F6 switches to the XL/XE international character",
     "set: accented letters replace the graphics at",
@@ -156,7 +156,7 @@ fn authors() -> String {
 /// Program details for Help > About.
 fn about() -> String {
     format!(
-        "Atari Editor\n\
+        "Edit Atari\n\
          Version {}\n\
          \n\
          A text editor for Atari 8-bit computer files.\n\
@@ -174,7 +174,7 @@ fn about() -> String {
 /// Everything in the program and its licences, for Help > Licensing.
 fn licensing() -> String {
     format!(
-        "ATARI EDITOR\n\
+        "EDIT ATARI\n\
          Copyright \u{a9} {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}\n\
          \n\
          This program is free software: you can redistribute it and/or modify \
@@ -218,7 +218,7 @@ fn licensing() -> String {
 fn main() -> ExitCode {
     let file = std::env::args_os().nth(1).map(PathBuf::from);
     let spec = AppSpec {
-        title: "Atari Editor",
+        title: "Edit Atari",
         app_id: "atari_editor",
         machine: Box::new(Atari::default()),
         keyboard: Box::new(AtariKeyboard::new()),

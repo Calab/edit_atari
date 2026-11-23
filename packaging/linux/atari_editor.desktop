@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Atari Editor
+Name=Edit Atari
 Comment=Edit Atari 8-bit ATASCII text and tokenized program files
 Exec=atari_editor %f
 Icon=atari_editor
