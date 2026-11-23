@@ -13,7 +13,7 @@ authors = ["Steve Norton", "Claude AI"]
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Calab/edit_atari"
-version = "1.2.0"
+version = "1.2.1"
 
 [profile.release]
 opt-level = 3
