@@ -165,9 +165,13 @@ fn about() -> String {
          Copyright \u{a9} {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}\n\
          \n\
          Licensed under the GNU GPL, version 3 or later.\n\
-         See Help > Licensing for details.",
+         See Help > Licensing for details.\n\
+         \n\
+         Source code:\n\
+         {}",
         env!("CARGO_PKG_VERSION"),
         authors(),
+        env!("CARGO_PKG_REPOSITORY"),
     )
 }
 
@@ -184,6 +188,9 @@ fn licensing() -> String {
          will be useful, but WITHOUT ANY WARRANTY; without even the implied \
          warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. The \
          full licence text is at the end of this page.\n\
+         \n\
+         The source code is available at:\n\
+         {}\n\
          \n\
          \n\
          ATARI CHARACTER SET\n\
@@ -208,6 +215,7 @@ fn licensing() -> String {
          GNU GENERAL PUBLIC LICENSE\n\
          \n\
          {}",
+        env!("CARGO_PKG_REPOSITORY"),
         atari::FONT_LICENSE,
         retro_sdl::ui_font::FALLBACK_LICENSE,
         include_str!("../THIRD_PARTY.txt"),
