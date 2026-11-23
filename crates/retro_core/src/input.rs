@@ -89,6 +89,10 @@ pub enum EditAction {
     MoveRight,
     LineStart,
     LineEnd,
+    /// To the start of the word before the cursor (Ctrl+Left).
+    WordLeft,
+    /// To the end of the word after the cursor (Ctrl+Right).
+    WordRight,
     PageUp,
     PageDown,
     DocStart,

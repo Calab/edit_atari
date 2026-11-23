@@ -453,6 +453,7 @@ impl App {
              \u{2325}\u{2318}F  Replace\n\
              \u{2318}L  Go to line number\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
+             \u{2325}\u{2190} / \u{2325}\u{2192}  Previous / next word (Shift selects)\n\
              \u{2318}\u{2191} / \u{2318}\u{2193}  Start / end of file\n\
              \u{2318}\u{2190} / \u{2318}\u{2192}  Start / end of line\n\
              \u{2318}+ / -  Zoom in / out\n\
@@ -471,6 +472,7 @@ impl App {
              Ctrl+H  Replace\n\
              Ctrl+G  Go to line number\n\
              Shift+arrows  Select text (or drag with the mouse)\n\
+             Ctrl+Left / Right  Previous / next word (Shift selects)\n\
              Ctrl+Home / End  Start / end of file\n\
              Ctrl+ + / -  Zoom in / out\n\
              Ctrl+,  Preferences\n"

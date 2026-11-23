@@ -50,6 +50,7 @@ character set is built in.
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
   S, P, Z, Y, X, C, V, A; on a Mac ⌘N, ⌘O, ⌘S and so on, with ⇧⌘Z for
   Redo and ⌘-arrows for the start and end of a line or the file),
+  Ctrl+Left/Right (⌥ on a Mac) to move by words, with Shift to select,
   underlined hot keys (Alt+F then Q quits), a right-click menu
   (Control-click on a Mac), and the system's own Open and Save dialogs.
 - Drop a file on the window to open it. Drop several and the first opens

@@ -239,8 +239,9 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     {
         app.menu.context = Some((x, y));
     }
-    // Keys, as if typed: ^X is Ctrl+X, \n is Enter, anything else is
-    // typed (key down, then its text).
+    // Keys, as if typed: ^X is Ctrl+X, \n is Enter, { } Ctrl+Left/Right,
+    // [ ] Ctrl+Shift+Left/Right, anything else is typed (key down, then
+    // its text).
     if let Ok(keys) = std::env::var("RETRO_EDITOR_KEYS") {
         use sdl2::keyboard::{Keycode, Mod};
         let mut chars = keys.chars();
@@ -258,6 +259,20 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 }
                 '\n' => {
                     app.key_down(Keycode::RETURN, Mod::NOMOD, false, &ctx);
+                }
+                // Ctrl+Left/Right, with Shift for [ and ].
+                '{' | '}' | '[' | ']' => {
+                    let k = if matches!(c, '{' | '[') {
+                        Keycode::LEFT
+                    } else {
+                        Keycode::RIGHT
+                    };
+                    let shift = if matches!(c, '[' | ']') {
+                        Mod::LSHIFTMOD
+                    } else {
+                        Mod::NOMOD
+                    };
+                    app.key_down(k, Mod::LCTRLMOD | shift, false, &ctx);
                 }
                 c => {
                     let code = Keycode::from_i32(c.to_ascii_lowercase() as i32);

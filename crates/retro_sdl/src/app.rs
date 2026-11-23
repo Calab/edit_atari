@@ -2416,6 +2416,22 @@ impl App {
         // editor's shortcuts still work, Ctrl+A/C/X/V acting on the field.
         if let Some(p) = self.active_find() {
             let in_field = p.focused().is_atari();
+            if in_field
+                && !atari_ctrl
+                && let Some(action) = word_key(k, editor_ctrl, m)
+            {
+                let field_layout = self.field_layout();
+                let machine = self.spec.machine.as_ref();
+                if let Some(e) = match self.find.as_ref().map(|p| p.focused()) {
+                    Some(find_page::Field::FindText) => Some(&mut self.find_field),
+                    Some(find_page::Field::ReplaceText) => Some(&mut self.replace_field),
+                    _ => None,
+                } {
+                    e.apply(action, &field_layout, machine, shift);
+                }
+                self.swallow_text = true;
+                return false;
+            }
             if editor_ctrl {
                 if in_field && matches!(k, Keycode::A | Keycode::C | Keycode::X | Keycode::V) {
                     self.field_clipboard(k, ctx.clipboard);
@@ -2453,6 +2469,13 @@ impl App {
                 self.open_menu(i);
                 self.swallow_text = true;
             }
+            return false;
+        }
+
+        // Moving by words (Ctrl+arrows; Option+arrows on a Mac).
+        if !atari_ctrl && let Some(action) = word_key(k, editor_ctrl, m) {
+            self.editor
+                .apply(action, layout, self.spec.machine.as_ref(), shift);
             return false;
         }
 
@@ -2767,6 +2790,43 @@ fn numpad_navigation(k: Keycode) -> Option<Keycode> {
 
 /// Write to a temporary file next to `path`, then rename over it, so a
 /// failed write never leaves a half-written file.
+/// The word (or, with ⌘ on a Mac, line) movement for an arrow key with
+/// the editor's modifier: Ctrl+Left/Right by words on Windows and Linux;
+/// on a Mac Option+Left/Right by words and ⌘Left/Right to the line's ends.
+fn word_key(k: Keycode, editor_ctrl: bool, m: Mod) -> Option<EditAction> {
+    let left = match k {
+        Keycode::LEFT => true,
+        Keycode::RIGHT => false,
+        _ => return None,
+    };
+    let option = m.intersects(Mod::LALTMOD | Mod::RALTMOD);
+    if cfg!(target_os = "macos") {
+        if editor_ctrl {
+            Some(if left {
+                EditAction::LineStart
+            } else {
+                EditAction::LineEnd
+            })
+        } else if option {
+            Some(if left {
+                EditAction::WordLeft
+            } else {
+                EditAction::WordRight
+            })
+        } else {
+            None
+        }
+    } else if editor_ctrl {
+        Some(if left {
+            EditAction::WordLeft
+        } else {
+            EditAction::WordRight
+        })
+    } else {
+        None
+    }
+}
+
 /// The longest Find or Replace text.
 const FIELD_MAX: usize = 120;
 

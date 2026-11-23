@@ -262,6 +262,8 @@ impl Editor {
                 | MoveRight
                 | LineStart
                 | LineEnd
+                | WordLeft
+                | WordRight
                 | DocStart
                 | DocEnd
         );
@@ -376,6 +378,8 @@ impl Editor {
             MoveLeft => self.doc.move_left(),
             MoveRight => self.doc.move_right(),
             LineStart => self.doc.line_start(),
+            WordLeft => self.doc.word_left(),
+            WordRight => self.doc.word_right(),
             LineEnd => self.doc.line_end(),
             DocStart => self.doc.doc_start(),
             DocEnd => self.doc.doc_end(),

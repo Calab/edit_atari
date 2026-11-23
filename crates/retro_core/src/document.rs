@@ -284,6 +284,52 @@ impl Document {
         }
     }
 
+    /// To the start of the word before the cursor, as in PC editors: past
+    /// any spaces, then past a run of letters and digits (or of other
+    /// characters). At the start of a line, to the end of the one before.
+    pub fn word_left(&mut self) {
+        let Pos { line, col } = self.cursor;
+        if col == 0 {
+            self.move_left();
+            return;
+        }
+        let text = &self.lines[line];
+        let mut c = col;
+        while c > 0 && word_class(text[c - 1]) == WordClass::Space {
+            c -= 1;
+        }
+        if c > 0 {
+            let class = word_class(text[c - 1]);
+            while c > 0 && word_class(text[c - 1]) == class {
+                c -= 1;
+            }
+        }
+        self.cursor.col = c;
+    }
+
+    /// To the end of the word after the cursor: past any spaces, then past
+    /// a run of letters and digits (or of other characters). At the end of
+    /// a line, to the start of the next.
+    pub fn word_right(&mut self) {
+        let Pos { line, col } = self.cursor;
+        let text = &self.lines[line];
+        if col >= text.len() {
+            self.move_right();
+            return;
+        }
+        let mut c = col;
+        while c < text.len() && word_class(text[c]) == WordClass::Space {
+            c += 1;
+        }
+        if c < text.len() {
+            let class = word_class(text[c]);
+            while c < text.len() && word_class(text[c]) == class {
+                c += 1;
+            }
+        }
+        self.cursor.col = c;
+    }
+
     pub fn line_start(&mut self) {
         self.cursor.col = 0;
     }
@@ -324,8 +370,61 @@ impl Document {
     }
 }
 
+/// What kind of character a code is, for moving by words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordClass {
+    Space,
+    /// Letters, digits and `_`, normal or inverse.
+    Word,
+    Other,
+}
+
+fn word_class(c: u8) -> WordClass {
+    let plain = c & 0x7F;
+    if c == b' ' {
+        WordClass::Space
+    } else if plain.is_ascii_alphanumeric() || plain == b'_' {
+        WordClass::Word
+    } else {
+        WordClass::Other
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn moves_by_words() {
+        let mut d = Document::from_lines(
+            vec![b"10 PRINT A$;\"HI\"".to_vec(), b"20 END".to_vec()],
+            true,
+        );
+        let mut stops = Vec::new();
+        for _ in 0..8 {
+            d.word_right();
+            stops.push((d.cursor().line, d.cursor().col));
+        }
+        // 10 | PRINT | A | $;" | HI | " | (next line) | 20
+        assert_eq!(
+            stops,
+            [
+                (0, 2),
+                (0, 8),
+                (0, 10),
+                (0, 13),
+                (0, 15),
+                (0, 16),
+                (1, 0),
+                (1, 2)
+            ]
+        );
+        let mut back = Vec::new();
+        for _ in 0..4 {
+            d.word_left();
+            back.push((d.cursor().line, d.cursor().col));
+        }
+        assert_eq!(back, [(1, 0), (0, 16), (0, 15), (0, 13)]);
+    }
     use super::*;
 
     fn doc(lines: &[&str]) -> Document {
