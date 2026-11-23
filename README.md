@@ -2,8 +2,8 @@
 
 A text editor for Atari 8-bit computer files, for Linux, Windows and macOS.
 It edits ATASCII text (Atari BASIC `LIST` files, Action!, Assembler Editor and
-MAC/65 source saved as text) using the real Atari character set, with `$9B`
-line endings.
+MAC/65 source saved as text) as well as some tokenized file types using the 
+real Atari character set, with `$9B` line endings.
 
 The program is a single file with nothing else to install: the Atari
 character set is built in.
