@@ -190,7 +190,7 @@ impl FileFormat for Mac65 {
 /// are skipped; lines are sorted by number, a later line replacing an
 /// earlier one with the same number.
 pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
-    let mut numbered: Vec<(u16, &[u8])> = Vec::new();
+    let mut numbered: Vec<(u16, usize, &[u8])> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if line.iter().all(|&c| c == b' ') {
             continue;
@@ -199,18 +199,18 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
         let number = std::str::from_utf8(&line[..digits])
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
-            .ok_or_else(|| format!("line {} of the text has no line number (0-65535)", i + 1))?;
-        numbered.push((number, line));
+            .ok_or_else(|| format!("editor line {} has no line number (0-65535)", i + 1))?;
+        numbered.push((number, i, line));
     }
-    numbered.sort_by_key(|&(n, _)| n);
+    numbered.sort_by_key(|&(n, ..)| n);
     numbered.reverse();
-    numbered.dedup_by_key(|&mut (n, _)| n); // keeps the later of two equal lines
+    numbered.dedup_by_key(|&mut (n, ..)| n); // keeps the later of two equal lines
     numbered.reverse();
 
     let mut body = Vec::new();
     let mut errors = Vec::new();
     let mut too_long = Vec::new();
-    for &(number, line) in &numbered {
+    for &(number, index, line) in &numbered {
         let tokens = match tokenize_line(line) {
             Ok(t) => t,
             Err(at) => {
@@ -220,7 +220,7 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
         };
         let len = tokens.len() + 3;
         if len > 255 {
-            too_long.push((number, len));
+            too_long.push((number, index, len));
             continue;
         }
         body.extend_from_slice(&number.to_le_bytes());
@@ -706,7 +706,7 @@ mod tests {
         let long = format!("10  .BYTE {}1", "1,".repeat(130)).into_bytes();
         let e = encode(&[long, b"20  RTS".to_vec()]).unwrap_err();
         assert!(e.starts_with("1 line is too long"), "{e}");
-        assert!(e.contains("Line 10 is "), "{e}");
+        assert!(e.contains("Line 10 (editor line 1) is "), "{e}");
     }
 
     /// A MAC/65 file from lines of (number, tokens).

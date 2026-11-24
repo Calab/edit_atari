@@ -301,7 +301,7 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<Vec<u8>, String> {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .filter(|&n| n <= 63999)
-            .ok_or_else(|| format!("line {} of the text has no line number (0-63999)", i + 1))?;
+            .ok_or_else(|| format!("editor line {} has no line number (0-63999)", i + 1))?;
         let rest = &text[digits..];
         let rest = &rest[rest.iter().take_while(|&&c| c == b' ').count()..];
         numbered.push((number, crunch(rest)));

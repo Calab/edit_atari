@@ -348,7 +348,8 @@ pub fn tokenize_with_variables(
     lines: &[Vec<u8>],
     names: Vec<Vec<u8>>,
 ) -> Result<Program, String> {
-    let mut numbered: Vec<(u16, &[u8])> = Vec::new();
+    // (line number, editor line, text)
+    let mut numbered: Vec<(u16, usize, &[u8])> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let text = trim_start(line);
         if text.is_empty() {
@@ -359,10 +360,10 @@ pub fn tokenize_with_variables(
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
             .filter(|&n| n < 32768)
-            .ok_or_else(|| format!("line {} of the text has no line number (0-32767)", i + 1))?;
-        numbered.push((number as u16, trim_start(&text[digits..])));
+            .ok_or_else(|| format!("editor line {} has no line number (0-32767)", i + 1))?;
+        numbered.push((number as u16, i, trim_start(&text[digits..])));
     }
-    numbered.sort_by_key(|&(n, _)| n); // stable: the later of two equal lines comes last
+    numbered.sort_by_key(|&(n, ..)| n); // stable: the later of two equal lines comes last
     numbered.dedup_by(|later, earlier| {
         if later.0 == earlier.0 {
             *earlier = *later;
@@ -377,7 +378,7 @@ pub fn tokenize_with_variables(
     let mut statements = Vec::new();
     let mut error_lines = Vec::new();
     let mut too_long = Vec::new();
-    for &(number, text) in &numbered {
+    for &(number, index, text) in &numbered {
         let body = match Parser::new(d, &g, text, &mut vars).line() {
             Ok(body) => body,
             Err(at) => {
@@ -387,7 +388,7 @@ pub fn tokenize_with_variables(
         };
         let len = body.len() + 3;
         if len > 255 {
-            too_long.push((number, len));
+            too_long.push((number, index, len));
             continue;
         }
         statements.extend_from_slice(&number.to_le_bytes());
@@ -410,9 +411,9 @@ pub fn tokenize_with_variables(
     })
 }
 
-/// Why a save can't go ahead: these lines (number, tokenized length) are
-/// over the 255 bytes a tokenized line can hold.
-pub(crate) fn too_long_message(lines: &[(u16, usize)]) -> String {
+/// Why a save can't go ahead: these lines (number, index in the editor,
+/// tokenized length) are over the 255 bytes a tokenized line can hold.
+pub(crate) fn too_long_message(lines: &[(u16, usize, usize)]) -> String {
     const SHOWN: usize = 8;
     let mut s = if lines.len() == 1 {
         "1 line is too long. A tokenized line can be at most 255 bytes:\n".to_string()
@@ -422,8 +423,11 @@ pub(crate) fn too_long_message(lines: &[(u16, usize)]) -> String {
             lines.len()
         )
     };
-    for (number, len) in lines.iter().take(SHOWN) {
-        s += &format!("\n    Line {number} is {len} bytes.");
+    for (number, index, len) in lines.iter().take(SHOWN) {
+        s += &format!(
+            "\n    Line {number} (editor line {}) is {len} bytes.",
+            index + 1
+        );
     }
     if lines.len() > SHOWN {
         s += &format!("\n    ...and {} more.", lines.len() - SHOWN);
@@ -1189,11 +1193,12 @@ mod tests {
     fn every_long_line_is_reported() {
         // Each number is 7 bytes tokenized, so these lines are far too long.
         let long = |n: u32| format!("{n} PRINT {}1", "1+".repeat(40)).into_bytes();
-        let lines = vec![long(10), b"20 PRINT".to_vec(), long(30)];
+        // Out of order, so the editor lines aren't the program's order.
+        let lines = vec![long(30), b"20 PRINT".to_vec(), long(10)];
         let e = tokenize(&crate::basic::ATARI_BASIC, &lines).unwrap_err();
         assert!(e.starts_with("2 lines are too long"), "{e}");
         assert!(
-            e.contains("Line 10 is ") && e.contains("Line 30 is "),
+            e.contains("Line 10 (editor line 3) is ") && e.contains("Line 30 (editor line 1) is "),
             "{e}"
         );
         assert!(!e.contains("Line 20"), "{e}");
