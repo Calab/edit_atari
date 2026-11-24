@@ -19,7 +19,12 @@ impl App {
         &mut self,
         canvas: &mut Canvas<Window>,
         atlas: &mut Texture,
-        (font, mono, small): (&mut UiFont<'t>, &mut UiFont<'t>, &mut UiFont<'t>),
+        (font, mono, small, gutter): (
+            &mut UiFont<'t>,
+            &mut UiFont<'t>,
+            &mut UiFont<'t>,
+            &mut UiFont<'t>,
+        ),
         f: &Frame,
         clipboard: &ClipboardUtil,
     ) {
@@ -45,6 +50,9 @@ impl App {
                 origin_y: f.text_top,
             };
             self.draw_text(&mut grid, f);
+            if f.gutter_w > 0 {
+                self.draw_line_numbers(canvas, gutter, f);
+            }
         } else {
             // Pages of plain text (licences) read best in a monospace font.
             let page_font = if self.overlay == Overlay::Licensing {
@@ -221,6 +229,41 @@ impl App {
                 .unwrap_or(self.spec.machine.space());
             grid.fill(cursor - scroll, 0, 1, c.text);
             grid.codes(cursor - scroll, 0, &[code], c.background);
+        }
+    }
+
+    /// Each line's number (counting from 1) in the column left of the
+    /// text, beside the line's first row; the cursor's line brighter.
+    fn draw_line_numbers(&self, canvas: &mut Canvas<Window>, font: &mut UiFont, f: &Frame) {
+        let c = self.screen_colors();
+        let mix = |a: u8, b: u8| ((u16::from(a) * 11 + u16::from(b) * 9) / 20) as u8;
+        let dim = Color::RGB(
+            mix(c.text.r, c.border.r),
+            mix(c.text.g, c.border.g),
+            mix(c.text.b, c.border.b),
+        );
+        let layout = &f.layout;
+        let cell = f.cell as i32;
+        // Numbers end a character's width before the text, and sit on
+        // the same baseline as the Atari characters (their bottom row
+        // is the space between lines).
+        let right = f.gutter_x + f.gutter_w as i32 - cell;
+        let baseline = cell * 7 / 8;
+        let current = self.editor.doc.cursor().line;
+        let top = self.editor.top;
+        let mut row = 0usize;
+        for (i, line) in self.editor.doc.lines().iter().enumerate() {
+            if row >= top + layout.rows {
+                break;
+            }
+            if row >= top {
+                let s = (i + 1).to_string();
+                let x = right - font.measure(&s);
+                let y = f.text_top + (row - top) as i32 * cell + baseline - font.baseline();
+                let color = if i == current { c.text } else { dim };
+                font.draw(canvas, x, y, &s, color);
+            }
+            row += layout.rows_for_len(line.len());
         }
     }
 

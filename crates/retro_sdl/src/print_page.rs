@@ -1,4 +1,5 @@
-//! The Print to PDF page: paper, line width, character size and header,
+//! The Print to PDF page: paper, line width, character size, header and
+//! line numbers,
 //! then Save PDF (and, if chosen, open it in the system's PDF viewer to
 //! print from there).
 
@@ -18,16 +19,18 @@ pub enum Field {
     Width,
     Size,
     Header,
+    LineNumbers,
     OpenAfter,
     Save,
     Cancel,
 }
 
-const ORDER: [Field; 7] = [
+const ORDER: [Field; 8] = [
     Field::Paper,
     Field::Width,
     Field::Size,
     Field::Header,
+    Field::LineNumbers,
     Field::OpenAfter,
     Field::Save,
     Field::Cancel,
@@ -41,6 +44,7 @@ pub struct View {
     pub width: usize,
     pub size: u32,
     pub header: bool,
+    pub line_numbers: bool,
     pub open_after: bool,
     /// What the settings give, e.g. "54 characters a line, 69 lines a page,
     /// 7 pages".
@@ -50,15 +54,17 @@ pub struct View {
 const PAPERS: [&str; 2] = ["Letter", "A4"];
 const WIDTHS: [&str; 2] = ["40 characters", "As wide as the page"];
 const HEADER: &str = "File name and page numbers";
+const LINE_NUMBERS: &str = "Number each line";
 const OPEN_AFTER: &str = "Open the PDF to print it";
 const SAVE: &str = "Save PDF...";
 const CANCEL: &str = "Cancel";
 
-const ROWS: [&str; 5] = [
+const ROWS: [&str; 6] = [
     "Paper",
     "Line width",
     "Character size",
     "Header",
+    "Line numbers",
     "After saving",
 ];
 
@@ -124,6 +130,7 @@ impl PrintPage {
         let controls_w = choice_w(font, &PAPERS)
             .max(choice_w(font, &WIDTHS))
             .max(lh * 2 / 3 + pad * 2 + font.measure(HEADER))
+            .max(lh * 2 / 3 + pad * 2 + font.measure(LINE_NUMBERS))
             .max(lh * 2 / 3 + pad * 2 + font.measure(OPEN_AFTER))
             .max(font.measure(&v.summary));
         let buttons_w = font.measure(SAVE) + font.measure(CANCEL) + pad * 20;
@@ -131,8 +138,8 @@ impl PrintPage {
             ((label_w + pad * 6 + controls_w).max(buttons_w) + pad * 8).min(width as i32 - pad * 4);
         let title_h = lh + pad * 2;
         let button_h = lh + pad * 2;
-        // Title, five rows, the summary, then the buttons.
-        let h = title_h + pad * 3 + row * 6 + pad * 2 + button_h + pad * 3;
+        // Title, the rows, the summary, then the buttons.
+        let h = title_h + pad * 3 + row * (ROWS.len() as i32 + 1) + pad * 2 + button_h + pad * 3;
         let x0 = (width as i32 - w) / 2;
         let y0 = ((height as i32 - h) / 2).max(0);
 
@@ -175,6 +182,9 @@ impl PrintPage {
                 }
                 "Header" => {
                     ui.checkbox(Field::Header, cx, y, HEADER, v.header);
+                }
+                "Line numbers" => {
+                    ui.checkbox(Field::LineNumbers, cx, y, LINE_NUMBERS, v.line_numbers);
                 }
                 _ => {
                     ui.checkbox(Field::OpenAfter, cx, y, OPEN_AFTER, v.open_after);

@@ -7,8 +7,8 @@
 //! table maps the codes to the clipboard's characters, so text copied out
 //! of the PDF is the same as text copied in the editor.
 //!
-//! The optional header (file name and page number) uses Helvetica, one of
-//! the fonts every PDF reader has.
+//! The optional header (file name and page number) and line numbers use
+//! Helvetica, one of the fonts every PDF reader has.
 
 use crate::machine::Machine;
 
@@ -38,6 +38,8 @@ pub struct PrintSettings {
     pub size: f32,
     /// File name and page number at the top of each page.
     pub header: bool,
+    /// Each line's number (counting from 1) left of its first row.
+    pub line_numbers: bool,
 }
 
 /// Space around the printed area, in points (half an inch).
@@ -45,6 +47,11 @@ const MARGIN: f32 = 36.0;
 /// Header text size, and the space the header takes above the text.
 const HEADER_SIZE: f32 = 9.0;
 const HEADER_SPACE: f32 = 24.0;
+/// Line numbers take this many characters' width: five digits (Helvetica's
+/// are 0.556 of its size, at 85% of a character's) and a space.
+const NUMBER_CHARS: f32 = 4.0;
+const NUMBER_SCALE: f32 = 0.85;
+const DIGIT_WIDTH: f32 = 0.556;
 
 /// The size of the printed area: characters per row and rows per page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +64,18 @@ impl PrintSettings {
     /// The most characters a row can hold at this size.
     pub fn fit_columns(&self) -> usize {
         let (w, _) = self.paper.size();
-        ((w - 2.0 * MARGIN) / self.size).floor().max(1.0) as usize
+        ((w - 2.0 * MARGIN - self.number_width()) / self.size)
+            .floor()
+            .max(1.0) as usize
+    }
+
+    /// The width of the line-number column, in points (0 without one).
+    fn number_width(&self) -> f32 {
+        if self.line_numbers {
+            NUMBER_CHARS * self.size
+        } else {
+            0.0
+        }
     }
 
     pub fn layout(&self) -> PageLayout {
@@ -72,14 +90,18 @@ impl PrintSettings {
 }
 
 /// The printed rows: each line split into rows of `columns` characters
-/// (an empty line is one empty row).
-pub fn rows(lines: &[Vec<u8>], columns: usize) -> Vec<&[u8]> {
+/// (an empty line is one empty row), with the line's index on its first.
+pub fn rows(lines: &[Vec<u8>], columns: usize) -> Vec<(Option<usize>, &[u8])> {
     let mut v = Vec::new();
-    for line in lines {
+    for (i, line) in lines.iter().enumerate() {
         if line.is_empty() {
-            v.push(&line[..]);
+            v.push((Some(i), &line[..]));
         } else {
-            v.extend(line.chunks(columns));
+            v.extend(
+                line.chunks(columns)
+                    .enumerate()
+                    .map(|(r, row)| ((r == 0).then_some(i), row)),
+            );
         }
     }
     v
@@ -102,7 +124,7 @@ pub fn pdf(
 ) -> Vec<u8> {
     let layout = s.layout();
     let all_rows = rows(lines, layout.columns);
-    let pages: Vec<&[&[u8]]> = if all_rows.is_empty() {
+    let pages: Vec<&[(Option<usize>, &[u8])]> = if all_rows.is_empty() {
         vec![&[]]
     } else {
         all_rows.chunks(layout.rows).collect()
@@ -180,8 +202,9 @@ pub fn pdf(
         // Each row's baseline is its bottom edge (the glyphs fill the
         // whole 8x8 cell).
         let size = s.size;
-        c += &format!("BT /F1 {size} Tf {size} TL {MARGIN} {} Td\n", y - size);
-        for (i, row) in rows.iter().enumerate() {
+        let left = MARGIN + s.number_width();
+        c += &format!("BT /F1 {size} Tf {size} TL {left} {} Td\n", y - size);
+        for (i, (_, row)) in rows.iter().enumerate() {
             if i > 0 {
                 c += "T* ";
             }
@@ -189,6 +212,22 @@ pub fn pdf(
             c += &format!("<{hex}> Tj\n");
         }
         c += "ET\n";
+        if s.line_numbers {
+            // Grey, right-aligned a character's width before the text, on
+            // the characters' baseline (their bottom pixel row is the
+            // space between lines).
+            let n_size = size * NUMBER_SCALE;
+            c += &format!("BT 0.45 g /F2 {n_size:.2} Tf\n");
+            for (i, (line, _)) in rows.iter().enumerate() {
+                if let Some(line) = line {
+                    let n = (line + 1).to_string();
+                    let x = left - size - n.len() as f32 * DIGIT_WIDTH * n_size;
+                    let base = y - (i + 1) as f32 * size + size / 8.0;
+                    c += &format!("1 0 0 1 {x:.2} {base:.2} Tm ({n}) Tj\n");
+                }
+            }
+            c += "ET\n";
+        }
         let id = page_ids[n];
         w.object(
             id,
@@ -361,6 +400,7 @@ mod tests {
             columns,
             size,
             header: true,
+            line_numbers: false,
         }
     }
 
@@ -381,9 +421,51 @@ mod tests {
         let lines = vec![vec![b'A'; 100], vec![], b"B".to_vec()];
         let r = rows(&lines, 40);
         assert_eq!(
-            r.iter().map(|r| r.len()).collect::<Vec<_>>(),
+            r.iter().map(|(_, r)| r.len()).collect::<Vec<_>>(),
             [40, 40, 20, 0, 1]
         );
+        // Only each line's first row has its number.
+        assert_eq!(
+            r.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            [Some(0), None, None, Some(1), Some(2)]
+        );
+    }
+
+    /// A machine whose characters are all blank, for writing PDFs.
+    struct Blank;
+    impl Machine for Blank {
+        fn name(&self) -> &'static str {
+            "Blank"
+        }
+        fn glyph(&self, _code: u8) -> [u8; 8] {
+            [0; 8]
+        }
+        fn space(&self) -> u8 {
+            b' '
+        }
+        fn screen_columns(&self) -> usize {
+            40
+        }
+        fn left_margin(&self) -> usize {
+            0
+        }
+        fn formats(&self) -> &'static [&'static dyn crate::FileFormat] {
+            &[]
+        }
+    }
+
+    #[test]
+    fn line_numbers_take_four_columns() {
+        let s = PrintSettings {
+            line_numbers: true,
+            ..settings(None, 10.0)
+        };
+        assert_eq!(s.layout().columns, 50);
+        let pdf =
+            String::from_utf8_lossy(&pdf(&Blank, &[b"A".to_vec(), vec![b'B'; 60]], "T", "P", &s))
+                .into_owned();
+        assert!(pdf.contains("(1) Tj") && pdf.contains("(2) Tj"));
+        assert!(!pdf.contains("(3) Tj"));
     }
 
     #[test]

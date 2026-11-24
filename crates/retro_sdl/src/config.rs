@@ -86,6 +86,8 @@ pub struct Config {
     pub border_color: Option<(u8, u8)>,
     /// Flash the cursor (the Atari's doesn't).
     pub cursor_flash: bool,
+    /// Show editor line numbers in a column left of the text.
+    pub line_numbers: bool,
     /// The font file last loaded for each character set (empty: none
     /// yet), kept while the built-in set is in use.
     pub fonts: [String; 2],
@@ -102,6 +104,8 @@ pub struct Config {
     pub print_header: bool,
     /// Open the PDF in the system's viewer after Print to PDF saves it.
     pub print_open: bool,
+    /// Print editor line numbers left of the text.
+    pub print_line_numbers: bool,
     /// Go to Line counts lines in the editor, not by program line number.
     pub goto_editor_line: bool,
     /// Files opened or saved lately, most recent first.
@@ -152,6 +156,7 @@ impl Default for Config {
             background_color: None,
             border_color: None,
             cursor_flash: false,
+            line_numbers: false,
             fonts: Default::default(),
             font_builtin: [true, true],
             attract_on: true,
@@ -161,6 +166,7 @@ impl Default for Config {
             print_size: DEFAULT_PRINT_SIZE,
             print_header: true,
             print_open: true,
+            print_line_numbers: false,
             goto_editor_line: true,
             recent: Vec::new(),
             window_size: None,
@@ -260,6 +266,7 @@ impl Config {
                     _ => {}
                 },
                 "cursor_flash" => c.cursor_flash = v == "on",
+                "line_numbers" => c.line_numbers = v == "on",
                 // A font file means it's in use, unless the line after
                 // says built-in (settings from before that line existed
                 // had no other way to say so).
@@ -330,6 +337,7 @@ impl Config {
                 }
                 "print_header" => c.print_header = v != "off",
                 "print_open" => c.print_open = v != "off",
+                "print_line_numbers" => c.print_line_numbers = v == "on",
                 "goto_editor_line" => c.goto_editor_line = v != "off",
                 "recent" => {
                     if !v.is_empty() && c.recent.len() < MAX_RECENT {
@@ -356,6 +364,7 @@ impl Config {
              control_key_modifier = {}\n\
              control_key_side = {}\n\
              cursor_flash = {}\n\
+             line_numbers = {}\n\
              # Font files (.FNT) for the standard and international sets\n\
              font = {}\n\
              font_builtin = {}\n\
@@ -388,6 +397,7 @@ impl Config {
              print_size = {}\n\
              print_header = {}\n\
              print_open = {}\n\
+             print_line_numbers = {}\n\
              # Go to Line: on = line in the editor, off = program line number\n\
              goto_editor_line = {}\n\
              # The window when last closed: width x height (empty = from the zoom)\n\
@@ -402,6 +412,7 @@ impl Config {
                 "left"
             },
             on_off(self.cursor_flash),
+            on_off(self.line_numbers),
             self.fonts[0],
             on_off(self.font_builtin[0]),
             self.fonts[1],
@@ -436,6 +447,7 @@ impl Config {
             self.print_size,
             on_off(self.print_header),
             on_off(self.print_open),
+            on_off(self.print_line_numbers),
             on_off(self.goto_editor_line),
             self.window_size
                 .map(|(w, h)| format!("{w}x{h}"))
@@ -474,6 +486,7 @@ impl Config {
             background_color,
             border_color,
             cursor_flash,
+            line_numbers,
             fonts,
             font_builtin,
             attract_on,
@@ -483,6 +496,7 @@ impl Config {
             print_size,
             print_header,
             print_open,
+            print_line_numbers,
             goto_editor_line,
             recent: _,
             window_size,
@@ -512,6 +526,7 @@ impl Config {
             background_color,
             border_color,
             cursor_flash,
+            line_numbers,
             fonts,
             font_builtin,
             attract_on,
@@ -521,6 +536,7 @@ impl Config {
             print_size,
             print_header,
             print_open,
+            print_line_numbers,
             goto_editor_line
         );
         let mut recent: Vec<String> = opened.to_vec();
@@ -561,6 +577,7 @@ mod tests {
                 right: true,
             },
             cursor_flash: true,
+            line_numbers: true,
             fonts: ["/home/me/BIG.FNT".into(), "/home/me/X.FNT".into()],
             font_builtin: [false, true],
             wrap: WrapMode::Window,
@@ -584,6 +601,7 @@ mod tests {
             print_size: 8,
             print_header: false,
             print_open: false,
+            print_line_numbers: true,
             goto_editor_line: true,
             recent: vec!["/home/me/PROG.BAS".into(), "C:\\Atari\\GAME.TUR".into()],
             window_size: Some((1280, 800)),

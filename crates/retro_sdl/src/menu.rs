@@ -34,6 +34,7 @@ pub enum Command {
     Replace,
     GoToLine,
     ToggleWrap,
+    ToggleLineNumbers,
     ZoomIn,
     ZoomOut,
     ToggleClick,
@@ -137,6 +138,7 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> 
             title: "&Options",
             items: vec![
                 item("&40 Columns", "F4", ToggleWrap),
+                item("&Line Numbers", "", ToggleLineNumbers),
                 item("Zoom &In", "Ctrl++", ZoomIn),
                 item("Zoom &Out", "Ctrl+-", ZoomOut),
                 SEP,

@@ -130,6 +130,9 @@ pub struct Frame {
     pub layout: Layout,
     /// X pixel of character column 0.
     pub origin_x: i32,
+    /// The line-number column: its left edge and width (0 when off).
+    pub gutter_x: i32,
+    pub gutter_w: u32,
 }
 
 /// What commands need from the window system.
@@ -198,6 +201,9 @@ pub struct App {
     /// Spacing on the Preferences page, which uses a smaller font.
     pub prefs_pad: i32,
     pub bar_height: i32,
+    /// How far a digit of the line-number font advances, per pixel of
+    /// its size.
+    pub gutter_advance: f32,
     /// The dialog box being shown, if any.
     pub dialog: Option<Dialog>,
     /// A file dialog waiting for an answer.
@@ -281,6 +287,7 @@ impl App {
             pad: 6,
             prefs_pad: 5,
             bar_height: 24,
+            gutter_advance: 0.6,
             dialog: None,
             file_job: None,
             swallow_text: false,
@@ -425,15 +432,23 @@ impl App {
         let text_top = self.bar_height;
         let status_top = height as i32 - self.bar_height;
         let rows = ((status_top - text_top).max(0) as u32 / cell) as usize;
-        let cols = (width / cell) as usize;
+        let gutter_w = if self.config.line_numbers {
+            Self::gutter_width(self.gutter_advance, cell)
+        } else {
+            0
+        };
+        let cols = (width.saturating_sub(gutter_w) / cell) as usize;
         let layout = self.editor.layout(self.spec.machine.as_ref(), cols, rows);
-        let origin_x = match self.editor.wrap {
+        // In 40 columns, the line numbers and the screen are centred
+        // together; if they don't fit, the right border goes first.
+        let gutter_x = match self.editor.wrap {
             WrapMode::Native => {
-                let w = (layout.left_margin + layout.text_cols) as u32 * cell;
+                let w = gutter_w + (layout.left_margin + layout.text_cols) as u32 * cell;
                 (width.saturating_sub(w) / 2) as i32
             }
             WrapMode::Window => 0,
         };
+        let origin_x = gutter_x + gutter_w as i32;
         Frame {
             width,
             height,
@@ -442,7 +457,22 @@ impl App {
             status_top,
             layout,
             origin_x,
+            gutter_x,
+            gutter_w,
         }
+    }
+
+    /// The line-number font's size for character cells `cell` pixels high.
+    pub fn gutter_font_px(cell: u32) -> f32 {
+        cell as f32 * 0.85
+    }
+
+    /// Width of the line-number column for `cell`-pixel characters: five
+    /// digits (each `advance` per pixel of font size), a little space
+    /// before them and a character's width after.
+    pub fn gutter_width(advance: f32, cell: u32) -> u32 {
+        let digits = 5.0 * advance * Self::gutter_font_px(cell);
+        (cell as f32 * 0.5 + digits).ceil() as u32 + cell
     }
 
     pub fn file_name(&self) -> String {
@@ -1585,6 +1615,7 @@ impl App {
             return false;
         };
         let f = p.focused();
+        let go_to = p.mode == find_page::Mode::GoTo;
         match k {
             Keycode::TAB => p.move_focus(if shift { -1 } else { 1 }),
             Keycode::F3 => self.find_next(!shift, layout),
@@ -1592,7 +1623,9 @@ impl App {
                 F::ReplaceOne | F::ReplaceAll | F::Close | F::Go => {
                     self.find_apply(f, Op::Press, layout)
                 }
-                F::LineText => self.go_to_line(layout),
+                // Anywhere else in Go to Line (the box, the Editor line
+                // check box), Enter goes to the line.
+                _ if go_to => self.go_to_line(layout),
                 _ => self.find_next(!shift, layout),
             },
             // In the Atari fields Esc is the Atari Esc key, as in the text.
@@ -1833,6 +1866,7 @@ impl App {
             columns: (!self.config.print_fill).then_some(40),
             size: self.config.print_size as f32,
             header: self.config.print_header,
+            line_numbers: self.config.print_line_numbers,
         }
     }
 
@@ -1867,6 +1901,7 @@ impl App {
             width: usize::from(self.config.print_fill),
             size: self.config.print_size,
             header: self.config.print_header,
+            line_numbers: self.config.print_line_numbers,
             open_after: self.config.print_open,
             summary,
         }
@@ -1885,6 +1920,9 @@ impl App {
                     .clamp(config::MIN_PRINT_SIZE, config::MAX_PRINT_SIZE);
             }
             (P::Header, Op::Toggle) => self.config.print_header = !self.config.print_header,
+            (P::LineNumbers, Op::Toggle) => {
+                self.config.print_line_numbers = !self.config.print_line_numbers
+            }
             (P::OpenAfter, Op::Toggle) => self.config.print_open = !self.config.print_open,
             (P::Save, Op::Press) => {
                 self.print = None;
@@ -2007,6 +2045,7 @@ impl App {
         prefs::View {
             native: self.config.wrap == WrapMode::Native,
             native_label: format!("{} columns", self.spec.machine.screen_columns()),
+            line_numbers: self.config.line_numbers,
             scale: self.config.scale,
             charsets: self.spec.machine.charsets(),
             charset: self.spec.machine.charset(),
@@ -2064,6 +2103,9 @@ impl App {
             (Field::ControlSide, Op::Choose(i)) => self.config.control_key.right = i == 1,
             (Field::CursorFlash, Op::Toggle) => {
                 self.config.cursor_flash = !self.config.cursor_flash
+            }
+            (Field::LineNumbers, Op::Toggle) => {
+                self.config.line_numbers = !self.config.line_numbers
             }
             (Field::WarnOn, Op::Toggle) => {
                 self.config.line_warning_on = !self.config.line_warning_on
@@ -2123,6 +2165,7 @@ impl App {
             print_fill: self.config.print_fill,
             print_size: self.config.print_size,
             print_header: self.config.print_header,
+            print_line_numbers: self.config.print_line_numbers,
             ..Config::default()
         };
         self.config = d;
@@ -2272,6 +2315,7 @@ impl App {
         };
         let checked = match c {
             ToggleWrap => Some(self.config.wrap == WrapMode::Native),
+            ToggleLineNumbers => Some(self.config.line_numbers),
             ToggleClick => Some(self.config.key_click),
             ToggleCursorFlash => Some(self.config.cursor_flash),
             ToggleControlAlt => Some(self.config.control_key.alt),
@@ -2345,6 +2389,17 @@ impl App {
             },
             SelectAll => self.editor.select_all(),
             ToggleWrap => self.set_wrap(self.config.wrap != WrapMode::Native),
+            ToggleLineNumbers => {
+                self.config.line_numbers = !self.config.line_numbers;
+                self.message = Some(
+                    if self.config.line_numbers {
+                        "Line numbers shown"
+                    } else {
+                        "Line numbers hidden"
+                    }
+                    .into(),
+                );
+            }
             ZoomIn => self.set_scale(self.config.scale as i32 + 1),
             ZoomOut => self.set_scale(self.config.scale as i32 - 1),
             ToggleClick => {

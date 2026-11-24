@@ -17,6 +17,7 @@ use crate::ui_font::UiFont;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Wrap,
+    LineNumbers,
     Zoom,
     FgHue,
     FgLum,
@@ -47,7 +48,7 @@ pub enum Field {
 /// machine has a colour model.
 fn order(colors: bool) -> Vec<Field> {
     use Field::*;
-    let mut v = vec![Wrap, Zoom];
+    let mut v = vec![Wrap, LineNumbers, Zoom];
     if colors {
         v.extend([FgHue, FgLum, BgHue, BgLum, BrdHue, BrdLum, ResetColors]);
     }
@@ -76,6 +77,7 @@ use crate::widgets::Ui;
 pub struct View<'a> {
     pub native: bool,
     pub native_label: String,
+    pub line_numbers: bool,
     pub scale: u32,
     pub charsets: &'a [&'a str],
     pub charset: usize,
@@ -191,12 +193,19 @@ impl Prefs {
             ui.font.draw(ui.canvas, lx, y, label, t.text);
             match r {
                 Row::Wrap => {
-                    ui.choice(
+                    let end = ui.choice(
                         Field::Wrap,
                         cx,
                         y,
                         &[&v.native_label, "Window width"],
                         usize::from(!v.native),
+                    );
+                    ui.checkbox(
+                        Field::LineNumbers,
+                        end + pad * 8,
+                        y,
+                        LINE_NUMBERS,
+                        v.line_numbers,
                     );
                 }
                 Row::Zoom => {
@@ -377,6 +386,7 @@ fn label_width(font: &mut UiFont, rows: &[(&str, Row)]) -> i32 {
 }
 
 const RESET_COLORS: &str = "Default";
+const LINE_NUMBERS: &str = "Line numbers";
 
 /// The CONTROL key choices: which modifier, and which side.
 fn control_modifiers() -> [&'static str; 2] {
@@ -435,7 +445,9 @@ fn row_width(font: &mut UiFont, p: i32, v: &View, row: &Row) -> i32 {
             + font.measure(name)
     };
     match row {
-        Row::Wrap => choice(font, &[&v.native_label, "Window width"]),
+        Row::Wrap => {
+            choice(font, &[&v.native_label, "Window width"]) + p * 8 + checkbox(font, LINE_NUMBERS)
+        }
         Row::Zoom => spinner(font, 3),
         Row::Text | Row::Background | Row::Border => {
             let Some(c) = &v.colors else { return 0 };

@@ -40,6 +40,9 @@ character set is built in.
   shows the line's length. Change the limit or turn it off in Preferences.
 - 40-column Atari layout with the 2-column margin, or wrapping at the window
   width (F4).
+- Line numbers (Options > Line Numbers): each line's number in the editor,
+  in a column left of the text that doesn't take any of the Atari's 40
+  columns. The cursor's line is highlighted. They can be printed too.
 - The XL/XE key click, reproduced from the Atari OS click routine (F5 turns it
   off).
 - A steady cursor, as on the Atari, or a flashing one (Options > Flashing
@@ -81,7 +84,7 @@ character set is built in.
 - The window opens at the size it had when last closed, maximized if it
   was (the window closed last decides).
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
-  zoom, text and background colours, character set, key click, flashing
+  line numbers, zoom, text and background colours, character set, key click, flashing
   cursor, CONTROL key, line length warning, attract mode, default folder (last used or a
   fixed one), and whether to save preferences on exit. Changes apply at
   once; "Save Preferences" writes them immediately.

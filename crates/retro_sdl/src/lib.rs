@@ -128,6 +128,19 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // The Preferences page packs a lot in, so it uses a smaller size.
     let mut small = ui_font::UiFont::new(&creator, 12.0 * app.ratio, ui_font::Style::Proportional);
     app.set_ui_metrics(font.line_height());
+    app.gutter_advance = mono.digit_advance();
+    // The line numbers, in the monospace font sized to the characters
+    // (made again when the zoom changes).
+    let mut gutter = mono.resized(app::App::gutter_font_px(app.config.scale * 8));
+    // Room for the line numbers beside the 40-column screen at `cell`.
+    let advance = app.gutter_advance;
+    let numbers = |on: bool, cell: u32| {
+        if on {
+            app::App::gutter_width(advance, cell)
+        } else {
+            0
+        }
+    };
 
     // Size the window. Zoom is in real pixels but window sizes are in
     // desktop units, which differ on high-DPI displays.
@@ -138,6 +151,8 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // smaller than the screen at 2x zoom.
     {
         let to_window = |n: u32| (n as f32 / app.ratio).ceil() as u32;
+        // Line numbers make the 40-column screen that much wider.
+        let on = app.config.line_numbers;
         let bounds = video.display_usable_bounds(0).ok();
         let fit = |w: u32, h: u32| match bounds {
             Some(b) => (w.min(b.width()), h.min(b.height())),
@@ -145,7 +160,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         };
         let screen = |scale: u32| {
             (
-                to_window(native_cols * 8 * scale),
+                to_window(native_cols * 8 * scale + numbers(on, 8 * scale)),
                 to_window(native_rows * 8 * scale),
             )
         };
@@ -159,7 +174,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         }
 
         let bars = app.bar_height as u32 * 2;
-        let (min_w, min_h) = fit(to_window(native_cols * 16), to_window(24 * 16 + bars));
+        let (min_w, min_h) = fit(
+            to_window(native_cols * 16 + numbers(on, 16)),
+            to_window(24 * 16 + bars),
+        );
         let _ = canvas.window_mut().set_minimum_size(min_w, min_h);
 
         let (pw, ph) = prefs::page_size(&mut small, app.prefs_pad, &app.prefs_view());
@@ -377,6 +395,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     let mut dropped: Vec<PathBuf> = Vec::new();
     let mut dropping = false;
     let mut first_frame = true;
+    let mut min_numbers = numbers(app.config.line_numbers, 16);
     while app.running {
         // Draw the first frame straight away; after that, sleep until
         // something happens (the Atari cursor doesn't blink).
@@ -512,11 +531,25 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         if std::mem::take(&mut app.charset_changed) {
             atlas = render::build_atlas(&creator, app.spec.machine.as_ref())?;
         }
+        if app::App::gutter_font_px(app.config.scale * 8) != gutter.px() {
+            gutter = mono.resized(app::App::gutter_font_px(app.config.scale * 8));
+        }
+        // The smallest window keeps room for the line numbers beside the
+        // 40-column screen at 2x.
+        let gutter_min = numbers(app.config.line_numbers, 16);
+        if gutter_min != min_numbers {
+            min_numbers = gutter_min;
+            let to_window = |n: u32| (n as f32 / app.ratio).ceil() as u32;
+            let (_, min_h) = canvas.window().minimum_size();
+            let _ = canvas
+                .window_mut()
+                .set_minimum_size(to_window(native_cols * 16 + gutter_min), min_h);
+        }
         let frame = app.frame(canvas.output_size()?);
         app.draw(
             &mut canvas,
             &mut atlas,
-            (&mut font, &mut mono, &mut small),
+            (&mut font, &mut mono, &mut small, &mut gutter),
             &frame,
             &clipboard,
         );

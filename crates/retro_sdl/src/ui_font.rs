@@ -138,6 +138,33 @@ impl<'t> UiFont<'t> {
         }
     }
 
+    /// The same font at another size (without looking for it again).
+    pub fn resized(&self, px: f32) -> Self {
+        let (ascent, line_height) = match self.font.horizontal_line_metrics(px) {
+            Some(m) => (m.ascent, m.new_line_size),
+            None => (px * 0.8, px * 1.2),
+        };
+        Self {
+            font: self.font.clone(),
+            px,
+            ascent,
+            line_height,
+            creator: self.creator,
+            glyphs: HashMap::new(),
+        }
+    }
+
+    /// The font's size in pixels.
+    pub fn px(&self) -> f32 {
+        self.px
+    }
+
+    /// How far a digit advances, per pixel of font size (the same for
+    /// every digit in a monospace font).
+    pub fn digit_advance(&self) -> f32 {
+        self.font.metrics('0', self.px).advance_width / self.px
+    }
+
     /// Distance from the top of a line to the text baseline, in pixels.
     pub fn baseline(&self) -> i32 {
         self.ascent.round() as i32
