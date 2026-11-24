@@ -73,10 +73,11 @@ pub trait FileFormat: Sync {
 #[derive(Debug)]
 pub struct Encoded {
     pub bytes: Vec<u8>,
-    /// Line numbers of lines that couldn't be written properly and were
-    /// stored another way (a BASIC line with a syntax error is stored as
-    /// an ERROR- line). The editor asks before saving these.
-    pub problem_lines: Vec<u32>,
+    /// Lines that couldn't be written properly and were stored another
+    /// way (a BASIC line with a syntax error is stored as an ERROR- line),
+    /// as (line number, index in the editor). The editor asks before
+    /// saving these.
+    pub problem_lines: Vec<(u32, usize)>,
 }
 
 impl Encoded {

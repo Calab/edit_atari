@@ -153,23 +153,12 @@ impl Dialog {
     }
 
     /// Buttons: 0 = Save Anyway, 1 = Cancel.
-    pub fn save_problem_lines(format: &str, lines: &[u32]) -> Self {
-        let shown: Vec<String> = lines.iter().take(8).map(u32::to_string).collect();
-        let more = if lines.len() > 8 { ", ..." } else { "" };
-        let what = if lines.len() == 1 {
-            "line has a syntax error"
-        } else {
-            "lines have syntax errors"
-        };
+    /// `lines` are (line number, index in the editor).
+    pub fn save_problem_lines(format: &str, lines: &[(u32, usize)]) -> Self {
         Self {
             purpose: Purpose::SaveProblemLines,
             title: "Syntax errors".into(),
-            text: format!(
-                "{} {what}: {}{more}\n\
-                 They will be saved as ERROR- lines, as {format} would.",
-                lines.len(),
-                shown.join(", ")
-            ),
+            text: problem_lines_text(format, lines),
             buttons: vec!["Save Anyway", "Cancel"],
             focus: 1,
             cancel: 1,
@@ -358,5 +347,40 @@ impl Dialog {
                 bx += bw + pad * 2;
             }
         }
+    }
+}
+
+/// The Syntax errors dialog's text: each line by its number and where it
+/// is in the editor (the first eight, then how many more).
+fn problem_lines_text(format: &str, lines: &[(u32, usize)]) -> String {
+    const SHOWN: usize = 8;
+    let mut s = if lines.len() == 1 {
+        "1 line has a syntax error:\n".to_string()
+    } else {
+        format!("{} lines have syntax errors:\n", lines.len())
+    };
+    for (number, index) in lines.iter().take(SHOWN) {
+        s += &format!("\n    Line {number} (editor line {})", index + 1);
+    }
+    if lines.len() > SHOWN {
+        s += &format!("\n    ...and {} more.", lines.len() - SHOWN);
+    }
+    s += &format!("\n\nThey will be saved as ERROR- lines, as {format} would.");
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn problem_lines_show_both_numbers() {
+        let t = problem_lines_text("Atari BASIC", &[(10, 2), (30, 0)]);
+        assert!(t.starts_with("2 lines have syntax errors:\n"), "{t}");
+        assert!(t.contains("Line 10 (editor line 3)"), "{t}");
+        assert!(t.contains("Line 30 (editor line 1)"), "{t}");
+        assert!(t.ends_with("as Atari BASIC would."), "{t}");
+        let many: Vec<(u32, usize)> = (0..10).map(|i| (i * 10, i as usize)).collect();
+        assert!(problem_lines_text("X", &many).contains("...and 2 more."));
     }
 }

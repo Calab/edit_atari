@@ -646,7 +646,11 @@ impl FileFormat for TokenizedBasic {
         let p = crate::tokenize::tokenize(self.dialect, doc.lines())?;
         Ok(retro_core::Encoded {
             bytes: p.bytes,
-            problem_lines: p.error_lines.into_iter().map(u32::from).collect(),
+            problem_lines: p
+                .error_lines
+                .into_iter()
+                .map(|(n, i)| (u32::from(n), i))
+                .collect(),
         })
     }
 

@@ -180,16 +180,19 @@ impl FileFormat for Mac65 {
         let (bytes, errors) = encode(doc.lines())?;
         Ok(retro_core::Encoded {
             bytes,
-            problem_lines: errors.into_iter().map(u32::from).collect(),
+            problem_lines: errors.into_iter().map(|(n, i)| (u32::from(n), i)).collect(),
         })
     }
 }
 
-/// LIST text back into a SAVE file, and the numbers of lines that didn't
-/// parse (stored as ERROR - lines, as MAC/65 stores them). Blank lines
-/// are skipped; lines are sorted by number, a later line replacing an
+/// Lines that didn't parse: (line number, index in the editor).
+pub type ErrorLines = Vec<(u16, usize)>;
+
+/// LIST text back into a SAVE file, and the lines that didn't parse
+/// (stored as ERROR - lines, as MAC/65 stores them). Blank lines are
+/// skipped; lines are sorted by number, a later line replacing an
 /// earlier one with the same number.
-pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
+pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, ErrorLines), String> {
     let mut numbered: Vec<(u16, usize, &[u8])> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if line.iter().all(|&c| c == b' ') {
@@ -214,7 +217,7 @@ pub fn encode(lines: &[Vec<u8>]) -> Result<(Vec<u8>, Vec<u16>), String> {
         let tokens = match tokenize_line(line) {
             Ok(t) => t,
             Err(at) => {
-                errors.push(number);
+                errors.push((number, index));
                 error_line(line, at)
             }
         };

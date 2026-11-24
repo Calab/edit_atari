@@ -329,7 +329,7 @@ pub struct Program {
     /// The whole file, ready to write.
     pub bytes: Vec<u8>,
     /// Lines that didn't parse, stored as ERROR- lines.
-    pub error_lines: Vec<u16>,
+    pub error_lines: Vec<(u16, usize)>,
 }
 
 /// Tokenize a program's LIST text (one line per entry, as the editor
@@ -382,7 +382,7 @@ pub fn tokenize_with_variables(
         let body = match Parser::new(d, &g, text, &mut vars).line() {
             Ok(body) => body,
             Err(at) => {
-                error_lines.push(number);
+                error_lines.push((number, index));
                 error_line(text, at, g.error)
             }
         };
@@ -1284,7 +1284,7 @@ mod tests {
     fn bad_lines_become_error_lines() {
         let lines = vec![b"10 PRUNT 5".to_vec(), b"20 END".to_vec()];
         let p = tokenize(&crate::basic::ATARI_BASIC, &lines).unwrap();
-        assert_eq!(p.error_lines, [10]);
+        assert_eq!(p.error_lines, [(10, 0)]);
         let d = ATARI_BASIC_FILE.decode(&p.bytes).unwrap();
         // The error is at the 5, which Atari BASIC shows in inverse video.
         assert_eq!(d.lines[0], b"10 ERROR-   PRUNT \xb5");
