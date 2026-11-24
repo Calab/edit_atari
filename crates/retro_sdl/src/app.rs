@@ -1253,17 +1253,20 @@ impl App {
 
     /// At exit: save the settings this window changed if "Save preferences
     /// on exit" is on (other windows may have saved theirs meanwhile).
-    /// Otherwise only record that choice. The recent files are kept
-    /// either way.
+    /// Otherwise only record that choice. The recent files and the window
+    /// size are kept either way.
     pub fn save_prefs_on_exit(&self) -> Result<(), String> {
         let on_disk = Config::load(self.spec.app_id);
         let out = if self.config.save_on_exit {
             self.config
                 .merged(&self.config_initial, on_disk.clone(), &self.opened)
         } else {
-            // Nothing changed but the recent files and the choice itself.
+            // Nothing changed but the recent files, the window size and the
+            // choice itself.
             let mut out = on_disk.merged(&on_disk, on_disk.clone(), &self.opened);
             out.save_on_exit = false;
+            out.window_size = self.config.window_size;
+            out.window_maximized = self.config.window_maximized;
             out
         };
         if out == on_disk {

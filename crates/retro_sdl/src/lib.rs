@@ -167,14 +167,25 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
             to_window((pw + app.pad * 8) as u32),
             to_window((ph + app.pad) as u32 + bars),
         );
-        let (sw, sh) = screen(app.config.scale);
-        let (w, h) = fit(sw.max(page.0).max(min_w), sh.max(page.1).max(min_h));
+        // The size it had when last closed, if any (it may have been on a
+        // bigger display); otherwise the screen at the zoom, or the
+        // Preferences page if that's bigger.
+        let (w, h) = match app.config.window_size {
+            Some((w, h)) => fit(w.max(min_w), h.max(min_h)),
+            None => {
+                let (sw, sh) = screen(app.config.scale);
+                fit(sw.max(page.0).max(min_w), sh.max(page.1).max(min_h))
+            }
+        };
         let window = canvas.window_mut();
         let _ = window.set_size(w, h);
         window.set_position(
             sdl2::video::WindowPos::Centered,
             sdl2::video::WindowPos::Centered,
         );
+        if app.config.window_maximized {
+            window.maximize();
+        }
     }
 
     if let Some(p) = file {
@@ -427,7 +438,10 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                 Event::Window {
                     win_event: WindowEvent::SizeChanged(..),
                     ..
-                } => app.editor.scroll_to_cursor(&frame.layout),
+                } => {
+                    app.editor.scroll_to_cursor(&frame.layout);
+                    note_window_size(&mut app.config, canvas.window());
+                }
                 // Back in the window: has another program changed the file?
                 Event::Window {
                     win_event: WindowEvent::FocusGained,
@@ -518,10 +532,28 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         }
     }
 
+    note_window_size(&mut app.config, canvas.window());
     if let Err(e) = app.save_prefs_on_exit() {
         eprintln!("could not save settings: {e}");
     }
     Ok(())
+}
+
+/// Remember the window's size for next time: whether it's maximized, and
+/// its size when it isn't (a maximized or full-screen size isn't kept, so
+/// un-maximizing next time goes back to the size the user chose).
+fn note_window_size(config: &mut Config, window: &sdl2::video::Window) {
+    use sdl2::sys::SDL_WindowFlags as F;
+    let flags = window.window_flags();
+    let has = |f: F| flags & f as u32 != 0;
+    if has(F::SDL_WINDOW_MINIMIZED) {
+        return;
+    }
+    config.window_maximized = has(F::SDL_WINDOW_MAXIMIZED);
+    let full = has(F::SDL_WINDOW_FULLSCREEN) || has(F::SDL_WINDOW_FULLSCREEN_DESKTOP);
+    if !config.window_maximized && !full {
+        config.window_size = Some(window.size());
+    }
 }
 
 /// Queue the key-click sound.

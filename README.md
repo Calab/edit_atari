@@ -78,6 +78,8 @@ character set is built in.
   before a Save would replace the other program's version.
 - Several windows can be open at once; each saves only the preferences
   changed in it.
+- The window opens at the size it had when last closed, maximized if it
+  was (the window closed last decides).
 - A Preferences page (Options > Preferences, Ctrl+, or F9): display width,
   zoom, text and background colours, character set, key click, flashing
   cursor, CONTROL key, line length warning, attract mode, default folder (last used or a

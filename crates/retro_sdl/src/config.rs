@@ -106,6 +106,11 @@ pub struct Config {
     pub goto_editor_line: bool,
     /// Files opened or saved lately, most recent first.
     pub recent: Vec<String>,
+    /// The window's size when it was last closed, in desktop units (not
+    /// maximized; `None` = work it out from the zoom), and whether it was
+    /// maximized. Kept like `recent`, whatever `save_on_exit` says.
+    pub window_size: Option<(u32, u32)>,
+    pub window_maximized: bool,
 }
 
 /// How many recent files the File menu lists.
@@ -158,6 +163,8 @@ impl Default for Config {
             print_open: true,
             goto_editor_line: true,
             recent: Vec::new(),
+            window_size: None,
+            window_maximized: false,
         }
     }
 }
@@ -173,6 +180,19 @@ pub const MAX_ATTRACT_MINUTES: u32 = 60;
 pub const DEFAULT_PRINT_SIZE: u32 = 12;
 pub const MIN_PRINT_SIZE: u32 = 5;
 pub const MAX_PRINT_SIZE: u32 = 24;
+
+/// The smallest window size kept in the settings, so a damaged file
+/// can't open a window too small to use (the minimum size applies too).
+const MIN_WINDOW: u32 = 200;
+const MAX_WINDOW: u32 = 20_000;
+
+/// "1280x800" -> (1280, 800).
+fn parse_size(v: &str) -> Option<(u32, u32)> {
+    let (w, h) = v.split_once('x')?;
+    let (w, h): (u32, u32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    let ok = |n: u32| (MIN_WINDOW..=MAX_WINDOW).contains(&n);
+    (ok(w) && ok(h)).then_some((w, h))
+}
 
 /// "9,2" -> (9, 2).
 fn parse_color(v: &str) -> Option<(u8, u8)> {
@@ -316,6 +336,8 @@ impl Config {
                         c.recent.push(v.to_string());
                     }
                 }
+                "window_size" => c.window_size = parse_size(v),
+                "window_maximized" => c.window_maximized = v == "on",
                 "click_volume" => {
                     if let Ok(f) = v.parse::<f32>() {
                         c.click_volume = f.clamp(0.0, 1.0);
@@ -368,6 +390,9 @@ impl Config {
              print_open = {}\n\
              # Go to Line: on = line in the editor, off = program line number\n\
              goto_editor_line = {}\n\
+             # The window when last closed: width x height (empty = from the zoom)\n\
+             window_size = {}\n\
+             window_maximized = {}\n\
              # Recent files, most recent first\n\
              {}",
             if self.control_key.alt { "alt" } else { "ctrl" },
@@ -412,6 +437,10 @@ impl Config {
             on_off(self.print_header),
             on_off(self.print_open),
             on_off(self.goto_editor_line),
+            self.window_size
+                .map(|(w, h)| format!("{w}x{h}"))
+                .unwrap_or_default(),
+            on_off(self.window_maximized),
             self.recent
                 .iter()
                 .map(|p| format!("recent = {p}\n"))
@@ -424,6 +453,7 @@ impl Config {
     /// may have saved since): the settings this window changed, over the
     /// ones on disk. `opened` are the files this window opened or saved,
     /// most recent first; they go before the others in the recent list.
+    /// The window size is always this window's: the last one closed wins.
     pub fn merged(&self, initial: &Config, on_disk: Config, opened: &[String]) -> Config {
         let mut out = on_disk;
         // Every field, so a new one can't be forgotten here.
@@ -455,6 +485,8 @@ impl Config {
             print_open,
             goto_editor_line,
             recent: _,
+            window_size,
+            window_maximized,
         } = self;
         macro_rules! changed {
             ($($f:ident),*) => {
@@ -499,6 +531,8 @@ impl Config {
         }
         recent.truncate(MAX_RECENT);
         out.recent = recent;
+        out.window_size = *window_size;
+        out.window_maximized = *window_maximized;
         out
     }
 
@@ -552,6 +586,8 @@ mod tests {
             print_open: false,
             goto_editor_line: true,
             recent: vec!["/home/me/PROG.BAS".into(), "C:\\Atari\\GAME.TUR".into()],
+            window_size: Some((1280, 800)),
+            window_maximized: true,
         };
         assert_eq!(Config::parse(&c.to_text()), c);
     }
@@ -574,6 +610,47 @@ mod tests {
         assert_eq!(m.scale, 4);
         assert!(!m.key_click);
         assert_eq!(m.recent, ["C.BAS", "A.BAS", "B.BAS"]);
+    }
+
+    #[test]
+    fn window_size_is_the_last_window_closed() {
+        let initial = Config::default();
+        let on_disk = Config {
+            window_size: Some((900, 700)),
+            ..Config::default()
+        };
+        let mine = Config {
+            window_size: Some((1280, 800)),
+            window_maximized: true,
+            ..Config::default()
+        };
+        let m = mine.merged(&initial, on_disk, &[]);
+        assert_eq!(m.window_size, Some((1280, 800)));
+        assert!(m.window_maximized);
+    }
+
+    #[test]
+    fn bad_window_sizes_are_ignored() {
+        for v in [
+            "",
+            "1280",
+            "1280x",
+            "x800",
+            "0x0",
+            "50x50",
+            "1280x99999",
+            "axb",
+        ] {
+            assert_eq!(
+                Config::parse(&format!("window_size = {v}")).window_size,
+                None,
+                "{v}"
+            );
+        }
+        assert_eq!(
+            Config::parse("window_size = 1280 x 800").window_size,
+            Some((1280, 800))
+        );
     }
 
     #[test]
