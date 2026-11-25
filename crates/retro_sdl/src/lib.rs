@@ -8,10 +8,12 @@ pub mod config;
 mod dialog;
 mod find_page;
 mod fonts_page;
+mod image_page;
 pub mod menu;
 mod prefs;
 mod print_page;
 pub mod render;
+mod source;
 pub mod ui_font;
 mod view;
 mod widgets;
@@ -56,6 +58,9 @@ pub struct AppSpec {
     /// Folder name for settings, e.g. "atari_editor".
     pub app_id: &'static str,
     pub machine: Box<dyn Machine>,
+    /// The disk images the machine reads, for File > Open from Image and
+    /// Save to Image. Without them, those menu items aren't shown.
+    pub disks: Option<Box<dyn retro_core::disk::DiskImages>>,
     pub keyboard: Box<dyn KeyboardRules>,
     /// Generates the key-click sound: (sample rate, volume) -> mono samples.
     pub click: fn(u32, f32) -> Vec<f32>,
@@ -368,6 +373,25 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     if let Some(path) = std::env::var_os("RETRO_EDITOR_SAVE_AS") {
         app.test_save_as(path.into());
     }
+    // Open a document by its recent-files text (e.g.
+    // "image:GAMES/PAC.BAS:/path/DISK.ATR" for a file in a disk image).
+    if let Ok(text) = std::env::var("RETRO_EDITOR_OPEN_SOURCE") {
+        app.test_open_source(&text);
+    }
+    // File > Open from Image ("1", or an image to show), then keys on its
+    // page ("down,return").
+    if let Some(v) = std::env::var_os("RETRO_EDITOR_IMAGE_PAGE") {
+        app.test_open_image_page((v != "1").then(|| v.into()));
+    }
+    if let Ok(keys) = std::env::var("RETRO_EDITOR_IMAGE_KEYS") {
+        app.test_image_keys(&keys);
+    }
+    // Type this text, then File > Save (as Ctrl+S does).
+    if let Ok(text) = std::env::var("RETRO_EDITOR_TYPE_AND_SAVE") {
+        let frame = app.frame(canvas.output_size()?);
+        app.text_input(&text, sdl2::keyboard::Mod::NOMOD, &frame.layout);
+        app.test_save();
+    }
     // Press dialog buttons in turn, e.g. "0,0".
     if let Ok(list) = std::env::var("RETRO_EDITOR_CHOOSE") {
         for n in list.split(',').filter_map(|n| n.trim().parse().ok()) {
@@ -490,6 +514,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     mouse_btn: MouseButton::Left,
                     x,
                     y,
+                    clicks,
                     ..
                 } => {
                     use sdl2::keyboard::Mod;
@@ -499,7 +524,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     if cfg!(target_os = "macos") && mods.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) {
                         app.mouse_right(px(x), px(y), &frame);
                     } else {
-                        app.mouse_down(px(x), px(y), shift, &frame);
+                        app.mouse_down(px(x), px(y), shift, clicks, &frame);
                     }
                 }
                 Event::MouseButtonDown {
@@ -517,7 +542,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
                     y,
                     ..
                 } => app.mouse_up(px(x), px(y), &ctx),
-                Event::MouseWheel { y, .. } => app.wheel(y, &frame),
+                Event::MouseWheel {
+                    y,
+                    mouse_x,
+                    mouse_y,
+                    ..
+                } => app.wheel(y, (px(mouse_x), px(mouse_y)), &frame),
                 _ => {}
             }
         }

@@ -22,10 +22,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "atari-disk"
+version = "0.1.0"
+source = "git+https://github.com/Calab/atari-disk#483d13daa20aed4cab66146f32564c4a7e1229ac"
+
+[[package]]
 name = "atari_editor"
 version = "1.3.1"
 dependencies = [
  "atari",
+ "atari-disk",
  "retro_core",
  "retro_sdl",
  "winresource",

@@ -5,6 +5,7 @@ use sdl2::rect::Rect;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
+use crate::source::Source;
 use crate::ui_font::UiFont;
 
 /// Everything a menu item can do.
@@ -12,6 +13,7 @@ use crate::ui_font::UiFont;
 pub enum Command {
     New,
     Open,
+    OpenFromImage,
     ReopenAs,
     Import,
     Save,
@@ -106,9 +108,10 @@ const SEP: Item = Item {
 };
 
 /// The menus. `alt_charset` names the machine's second character set, if
-/// it has one, for a toggle in the Options menu. In labels, `&` marks the
-/// hot key (underlined; pressing it chooses the item while the menu is open).
-pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> {
+/// it has one, for a toggle in the Options menu; `images` adds the disk
+/// image items to the File menu. In labels, `&` marks the hot key
+/// (underlined; pressing it chooses the item while the menu is open).
+pub fn menus(alt_charset: Option<&'static str>, recent: &[String], images: bool) -> Vec<Menu> {
     use Command::*;
     let mut m = vec![
         Menu {
@@ -116,6 +119,7 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> 
             items: vec![
                 item("&New", "Ctrl+N", New),
                 item("&Open...", "Ctrl+O", Open),
+                item("Open from I&mage...", "", OpenFromImage),
                 item("&Reopen As...", "", ReopenAs),
                 item("&Import...", "", Import),
                 SEP,
@@ -182,6 +186,9 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> 
         item("R&eplace...", "Ctrl+H", Replace),
         item("&Go to Line...", "Ctrl+G", GoToLine),
     ]);
+    if !images {
+        m[0].items.retain(|i| i.command != Some(OpenFromImage));
+    }
     // Recent files, numbered, above Quit.
     if !recent.is_empty() {
         let quit = m[0].items.len() - 1;
@@ -200,26 +207,23 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String]) -> Vec<Menu> 
     m
 }
 
-/// "&1 PROG.BAS" for each recent file, adding the folder's name where two
-/// files share a name.
+/// "&1 PROG.BAS" for each recent file ("&2 MYDISK.ATR > SAMPLE.LST" for
+/// a file in a disk image), adding the folder's name where two share a
+/// name.
 fn recent_labels(recent: &[String]) -> Vec<String> {
-    let name = |p: &str| {
-        std::path::Path::new(p)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| p.to_string())
-    };
-    recent
+    let sources: Vec<Source> = recent.iter().map(|p| Source::from_recent(p)).collect();
+    sources
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let n = name(p);
-            let shared = recent.iter().filter(|q| name(q) == n).count() > 1;
+        .map(|(i, s)| {
+            let n = s.label();
+            let shared = sources.iter().filter(|q| q.label() == n).count() > 1;
             // `&&` shows a literal & in a label... names rarely have one;
             // drop it rather than mark a hot key.
             let n = n.replace('&', "");
             if shared {
-                let dir = std::path::Path::new(p)
+                let dir = s
+                    .host()
                     .parent()
                     .and_then(|d| d.file_name())
                     .map(|d| d.to_string_lossy().into_owned())

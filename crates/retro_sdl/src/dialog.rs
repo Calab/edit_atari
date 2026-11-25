@@ -17,6 +17,8 @@ use crate::ui_font::{BOLD, UiFont};
 pub enum After {
     New,
     Open,
+    /// File > Open from Image: show the page.
+    OpenFromImage,
     Import,
     /// Open the file that was dropped on the window (`App::dropped`).
     OpenDropped,

@@ -5,6 +5,8 @@
 // Don't open a console window alongside the editor on Windows.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod disk;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -229,6 +231,7 @@ fn main() -> ExitCode {
         title: "Edit Atari",
         app_id: "atari_editor",
         machine: Box::new(Atari::default()),
+        disks: Some(Box::new(disk::AtariDisks)),
         keyboard: Box::new(AtariKeyboard::new()),
         click: atari::click::key_click,
         // Default Atari text screen: COLOR2 $94 background, COLOR1 $CA

@@ -128,6 +128,19 @@ impl App {
             );
             self.fonts = Some(p);
         }
+        if let Some(mut p) = self.image_page.take() {
+            let cell = 8 * (2.0 * self.ratio).round().max(1.0) as i32;
+            p.draw(
+                canvas,
+                small,
+                atlas,
+                (f.width, f.height),
+                self.prefs_pad,
+                cell,
+                crate::render::rgb(self.spec.palette.warning),
+            );
+            self.image_page = Some(p);
+        }
         if let Some(mut p) = self.print.take() {
             p.draw(
                 canvas,
@@ -431,7 +444,7 @@ impl App {
             Some(m) => m.clone(),
             None => format!(
                 "{}{}",
-                self.file_name(),
+                self.source_label(),
                 if doc.is_modified() { " (modified)" } else { "" }
             ),
         };

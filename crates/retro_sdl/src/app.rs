@@ -50,7 +50,10 @@ struct FileJob {
 
 /// A save in progress: where, in what format, and what to do after.
 struct PendingSave {
-    path: PathBuf,
+    target: Source,
+    /// A file already in the image may be replaced (Save writes back to
+    /// where the document came from; Save to Image asks first).
+    replace: bool,
     format: &'static dyn FileFormat,
     then: Option<After>,
     /// The user agreed to save lines as ERROR- lines.
@@ -78,6 +81,8 @@ enum FileJobKind {
     SavePdf,
     /// Choose a font file for character set `n`.
     Font(usize),
+    /// Choose a disk image (Open from Image).
+    ChooseImage,
 }
 
 /// The forms File > Export writes.
@@ -103,9 +108,12 @@ impl ExportKind {
 use crate::config::{self, Config, ControlKey, DirMode};
 use crate::find_page::{self, FindPage};
 use crate::fonts_page::{self, FontsPage};
+use crate::image_page::{self, ImagePage};
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 use crate::prefs::{self, Field, Op, Prefs};
 use crate::print_page::{self, PrintPage};
+use crate::source::Source;
+use retro_core::disk::{DiskError, DiskVolume};
 use retro_core::print::{Paper, PrintSettings};
 use retro_core::search;
 
@@ -145,13 +153,14 @@ pub struct App {
     pub spec: AppSpec,
     pub config: Config,
     pub editor: Editor,
-    pub path: Option<PathBuf>,
+    /// Where the document came from, and where Save writes it.
+    pub source: Option<Source>,
     /// The name an imported document, not yet saved, goes by: the PC
     /// file's name with the text format's extension.
     import_name: Option<String>,
     /// A file dropped on the window (or chosen from the recent files),
     /// waiting for "Save changes?".
-    dropped: Option<PathBuf>,
+    dropped: Option<Source>,
     /// The settings as loaded, so only this window's changes are saved
     /// (other windows may have saved theirs meanwhile).
     config_initial: Config,
@@ -161,8 +170,13 @@ pub struct App {
     /// The Options menu's character set item, for rebuilding the menus.
     alt_charset: Option<&'static str>,
     /// The file's modification time and size when last read or written,
-    /// to notice another program changing it.
+    /// to notice another program changing it. For a file in a disk image,
+    /// the image file's.
     disk_stamp: Option<(std::time::SystemTime, u64)>,
+    /// For a file in a disk image: its bytes as last read or written, so
+    /// a change to other files in the image doesn't count as a change
+    /// to this one.
+    image_copy: Option<Vec<u8>>,
     /// The Find / Go to Line panel, when open, and what it holds.
     pub find: Option<FindPage>,
     /// The Find and Replace fields: one-line Atari text, and how far each
@@ -189,6 +203,8 @@ pub struct App {
     pub print: Option<PrintPage>,
     /// The Fonts page, when open.
     pub fonts: Option<FontsPage>,
+    /// The Open from Image page, when open.
+    pub image_page: Option<ImagePage>,
     pub menus: Vec<Menu>,
     pub context_menu: Menu,
     pub menu: MenuState,
@@ -244,7 +260,7 @@ impl App {
             config.wrap,
             spec.machine.default_tab_stops(),
         );
-        let menus = menu::menus(alt_charset, &config.recent);
+        let menus = menu::menus(alt_charset, &config.recent, spec.disks.is_some());
         let config_initial = config.clone();
         let field = Editor::new(
             Document::new(),
@@ -255,7 +271,7 @@ impl App {
             spec,
             config,
             editor,
-            path: None,
+            source: None,
             import_name: None,
             pending_case: None,
             dropped: None,
@@ -263,6 +279,7 @@ impl App {
             opened: Vec::new(),
             alt_charset,
             disk_stamp: None,
+            image_copy: None,
             find: None,
             find_field: field.clone(),
             replace_field: field,
@@ -279,6 +296,7 @@ impl App {
             prefs: None,
             print: None,
             fonts: None,
+            image_page: None,
             menus,
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
@@ -475,19 +493,28 @@ impl App {
         (cell as f32 * 0.5 + digits).ceil() as u32 + cell
     }
 
+    /// The document's name: the file's (in an image, the name on the
+    /// disk), the imported file's, or "Untitled".
     pub fn file_name(&self) -> String {
-        self.path
+        self.source
             .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
+            .map(Source::name)
             .or_else(|| self.import_name.clone())
             .unwrap_or_else(|| "Untitled".into())
+    }
+
+    /// The name with its image if it's in one: "MYDISK.ATR > SAMPLE.LST".
+    pub fn source_label(&self) -> String {
+        match &self.source {
+            Some(s) => s.label(),
+            None => self.file_name(),
+        }
     }
 
     pub fn window_title(&self) -> String {
         format!(
             "{}{} - {}",
-            self.file_name(),
+            self.source_label(),
             if self.editor.doc.is_modified() {
                 "*"
             } else {
@@ -501,23 +528,72 @@ impl App {
         self.editor = Editor::new(doc, self.config.wrap, self.editor.tabs.clone());
         self.import_name = None;
         self.disk_stamp = None;
+        self.image_copy = None;
     }
 
     // ----- files -------------------------------------------------------------
 
     pub fn open_path(&mut self, path: &Path) {
-        self.open_path_as(path, None);
+        self.open_source(Source::File(path.to_path_buf()));
     }
 
-    /// Open a file, in `forced` format if given, otherwise the format
+    fn open_source(&mut self, source: Source) {
+        self.open_source_as(source, None);
+    }
+
+    /// Read a document's bytes from where it is: the file, or the file in
+    /// its disk image. Errors are io errors, or the disk's own text.
+    fn read_source(&self, source: &Source) -> Result<Vec<u8>, SourceError> {
+        match source {
+            Source::File(p) => std::fs::read(p).map_err(SourceError::Io),
+            Source::Image { image, path } => {
+                let vol = self.open_image(image)?;
+                vol.read(path).map_err(SourceError::Disk)
+            }
+        }
+    }
+
+    /// Read and open a disk image file.
+    fn open_image(&self, image: &Path) -> Result<Box<dyn DiskVolume>, SourceError> {
+        let Some(disks) = &self.spec.disks else {
+            return Err(SourceError::Disk(DiskError::other(
+                "this editor can't read disk images",
+            )));
+        };
+        let bytes = std::fs::read(image).map_err(SourceError::Io)?;
+        disks.open(&bytes).map_err(SourceError::Disk)
+    }
+
+    /// Write `bytes` to `source`. For a file in an image: read the image
+    /// afresh, write the file into it (replacing one already there only
+    /// if `replace`), then save the whole image. On any error nothing is
+    /// changed.
+    fn write_source(
+        &self,
+        source: &Source,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<(), SourceError> {
+        match source {
+            Source::File(p) => write_atomically(p, bytes).map_err(SourceError::Io),
+            Source::Image { image, path } => {
+                let mut vol = self.open_image(image)?;
+                vol.write(path, bytes, replace, None)
+                    .map_err(SourceError::Disk)?;
+                write_atomically(image, &vol.to_bytes()).map_err(SourceError::Io)
+            }
+        }
+    }
+
+    /// Open a document, in `forced` format if given, otherwise the format
     /// `format::detect` picks.
-    fn open_path_as(&mut self, path: &Path, forced: Option<&'static dyn FileFormat>) {
-        match std::fs::read(path) {
+    fn open_source_as(&mut self, source: Source, forced: Option<&'static dyn FileFormat>) {
+        match self.read_source(&source) {
             Ok(bytes) => {
                 let formats = self.spec.machine.formats();
                 let text = self.spec.machine.text_format();
-                let ext = path.extension().and_then(|e| e.to_str());
-                let fmt = forced.unwrap_or_else(|| format::detect(formats, &bytes, ext));
+                let ext = source.extension();
+                let fmt = forced.unwrap_or_else(|| format::detect(formats, &bytes, ext.as_deref()));
                 let d = match fmt.decode(&bytes) {
                     Ok(d) => d,
                     Err(e) => {
@@ -554,22 +630,29 @@ impl App {
                 }
                 self.format = fmt;
                 self.new_editor(doc);
+                if matches!(source, Source::Image { .. }) {
+                    self.image_copy = Some(bytes);
+                }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A file named on the command line that isn't there yet.
+            Err(SourceError::Io(e))
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && matches!(source, Source::File(_)) =>
+            {
                 self.format = self.spec.machine.text_format();
                 self.new_editor(Document::new());
                 self.message = Some("New file".into());
             }
             Err(e) => {
-                self.message = Some(format!("Can't open {}: {e}", path.display()));
+                self.message = Some(format!("Can't open {}: {e}", describe(&source)));
                 return;
             }
         }
-        self.path = Some(path.to_path_buf());
-        self.disk_stamp = Self::stamp(path);
+        self.disk_stamp = Self::stamp(source.host());
         if self.disk_stamp.is_some() {
-            self.note_recent(path);
+            self.note_recent(&source);
         }
+        self.source = Some(source);
     }
 
     /// Import a PC text file as a new, unsaved document in the text
@@ -590,7 +673,7 @@ impl App {
         let text = self.spec.machine.text_format();
         self.format = text;
         self.new_editor(doc);
-        self.path = None;
+        self.source = None;
         self.import_name = path
             .file_name()
             .map(|n| with_extension_like(&n.to_string_lossy(), text.extension()));
@@ -654,9 +737,9 @@ impl App {
     /// file when saving, otherwise the default folder from Preferences.
     fn in_start_dir(&self, mut d: rfd::FileDialog, for_save: bool) -> rfd::FileDialog {
         let beside = self
-            .path
+            .source
             .as_ref()
-            .and_then(|p| p.parent())
+            .and_then(|s| s.host().parent())
             .filter(|d| for_save && d.is_dir())
             .map(Path::to_path_buf);
         if let Some(dir) = beside.or_else(|| self.config.start_dir()) {
@@ -692,6 +775,7 @@ impl App {
                 self.in_start_dir(d, true)
             }
             FileJobKind::Open => self.file_dialog("Open", false),
+            FileJobKind::ChooseImage => self.image_dialog(),
             FileJobKind::Font(i) => {
                 let mut d = rfd::FileDialog::new()
                     .set_title("Font")
@@ -746,7 +830,10 @@ impl App {
                 | FileJobKind::SaveListingAs
                 | FileJobKind::Export { .. }
                 | FileJobKind::SavePdf => d.save_file(),
-                FileJobKind::Open | FileJobKind::Import | FileJobKind::Font(_) => d.pick_file(),
+                FileJobKind::Open
+                | FileJobKind::Import
+                | FileJobKind::Font(_)
+                | FileJobKind::ChooseImage => d.pick_file(),
                 FileJobKind::Folder => d.pick_folder(),
             });
         };
@@ -780,6 +867,16 @@ impl App {
                 self.open_path(&path);
             }
             (FileJobKind::Import, Some(path)) => self.import_path(&path),
+            (FileJobKind::ChooseImage, Some(path)) => {
+                self.note_folder(&path);
+                self.load_image_page(path);
+            }
+            // Nothing chosen, and no image to show: there's no page.
+            (FileJobKind::ChooseImage, None) => {
+                if self.image_page.as_ref().is_some_and(|p| p.image.is_none()) {
+                    self.image_page = None;
+                }
+            }
             (FileJobKind::SavePdf, Some(path)) => self.save_pdf(&path),
             (FileJobKind::Font(i), Some(path)) => {
                 self.set_font(i, Some(&path));
@@ -794,7 +891,8 @@ impl App {
             }
             (FileJobKind::SaveAs { then }, Some(path)) => self.save_as_to(path, then),
             (FileJobKind::SaveListingAs, Some(path)) => self.save_to(PendingSave {
-                path,
+                target: Source::File(path),
+                replace: true,
                 format: self.spec.machine.text_format(),
                 then: None,
                 confirmed: false,
@@ -892,9 +990,10 @@ impl App {
     /// Save to the current file (asking for a name if there isn't one, or
     /// if its format can't be written), then do `then` if the save worked.
     fn save(&mut self, then: Option<After>) {
-        match self.path.clone() {
-            Some(path) if self.format.can_encode() => self.save_to(PendingSave {
-                path,
+        match self.source.clone() {
+            Some(target) if self.format.can_encode() => self.save_to(PendingSave {
+                target,
+                replace: true,
                 format: self.format,
                 then,
                 confirmed: false,
@@ -929,7 +1028,8 @@ impl App {
                     .any(|x| x.eq_ignore_ascii_case(&ext))
         };
         let pending = |format| PendingSave {
-            path: path.clone(),
+            target: Source::File(path.clone()),
+            replace: true,
             format,
             then,
             confirmed: false,
@@ -986,7 +1086,7 @@ impl App {
             Err(e) => {
                 // The format can't hold the program as it is: say why, in
                 // a dialog rather than the easily missed status bar.
-                let name = save.path.file_name().unwrap_or_default().to_string_lossy();
+                let name = save.target.name();
                 self.dialog = Some(Dialog::notice(
                     &format!("Can't save {name}"),
                     &format!(
@@ -999,9 +1099,17 @@ impl App {
                 return;
             }
         };
-        // Another program changed the file since it was read here.
-        if !save.overwrite && Some(&save.path) == self.path.as_ref() && self.changed_on_disk() {
-            self.dialog = Some(Dialog::overwrite_changed(&self.file_name()));
+        // Another program changed the file (or the disk image it's in)
+        // since it was read here.
+        if !save.overwrite
+            && self.source.as_ref().map(Source::host) == Some(save.target.host())
+            && self.changed_on_disk()
+        {
+            let changed = match &save.target {
+                Source::File(_) => self.file_name(),
+                Source::Image { .. } => file_label(&save.target.host().to_string_lossy()),
+            };
+            self.dialog = Some(Dialog::overwrite_changed(&changed));
             self.pending_save = Some(save);
             return;
         }
@@ -1013,23 +1121,46 @@ impl App {
             self.pending_save = Some(save);
             return;
         }
-        if let Err(e) = write_atomically(&save.path, &encoded.bytes) {
-            self.message = Some(format!("Save failed: {e}"));
-            return;
+        match self.write_source(&save.target, &encoded.bytes, save.replace) {
+            Ok(()) => {}
+            Err(SourceError::Io(e)) => {
+                self.message = Some(format!("Save failed: {e}"));
+                return;
+            }
+            // Disk full, locked, write-protected...: worth a dialog.
+            Err(SourceError::Disk(e)) => {
+                let label = save.target.label();
+                self.dialog = Some(Dialog::notice(
+                    &format!("Can't save {}", save.target.name()),
+                    &format!("{label} wasn't saved.\n\n{}", sentence(&e.message)),
+                ));
+                self.message = Some("Not saved".into());
+                return;
+            }
         }
         self.format = save.format;
         self.editor.doc.mark_saved();
-        self.note_folder(&save.path);
-        self.disk_stamp = Self::stamp(&save.path);
-        self.note_recent(&save.path);
-        self.path = Some(save.path);
+        self.note_folder(save.target.host());
+        self.disk_stamp = Self::stamp(save.target.host());
+        self.note_recent(&save.target);
+        self.image_copy = match save.target {
+            Source::Image { .. } => Some(encoded.bytes.clone()),
+            Source::File(_) => None,
+        };
+        let to = match &save.target {
+            Source::Image { image, .. } => {
+                format!(" to {}", file_label(&image.to_string_lossy()))
+            }
+            Source::File(_) => String::new(),
+        };
+        self.source = Some(save.target);
         let errors = match encoded.problem_lines.len() {
             0 => String::new(),
             1 => ", 1 line as ERROR-".into(),
             n => format!(", {n} lines as ERROR-"),
         };
         self.message = Some(format!(
-            "Saved {} bytes ({}{errors})",
+            "Saved {} bytes{to} ({}{errors})",
             encoded.bytes.len(),
             save.format.name()
         ));
@@ -1052,15 +1183,16 @@ impl App {
             After::New => {
                 self.format = self.spec.machine.text_format();
                 self.new_editor(Document::new());
-                self.path = None;
+                self.source = None;
                 self.message = None;
             }
             After::Open => self.start_file_job(FileJobKind::Open),
+            After::OpenFromImage => self.open_image_page(),
             After::Import => self.start_file_job(FileJobKind::Import),
             After::OpenDropped => {
-                if let Some(path) = self.dropped.take() {
-                    self.note_folder(&path);
-                    self.open_path(&path);
+                if let Some(source) = self.dropped.take() {
+                    self.note_folder(source.host());
+                    self.open_source(source);
                 }
             }
             After::Quit => self.running = false,
@@ -1107,13 +1239,13 @@ impl App {
             },
             Purpose::ChangedOnDisk => {
                 if button == 0 {
-                    if let Some(path) = self.path.clone() {
-                        self.open_path(&path);
+                    if let Some(source) = self.source.clone() {
+                        self.open_source(source);
                         self.message = Some(format!("Reloaded {}", self.file_name()));
                     }
-                } else if let Some(path) = &self.path {
+                } else if let Some(source) = &self.source {
                     // Keep mine: don't ask again until it changes again.
-                    self.disk_stamp = Self::stamp(path);
+                    self.disk_stamp = Self::stamp(source.host());
                 }
             }
             Purpose::OverwriteChanged => {
@@ -1144,8 +1276,8 @@ impl App {
                     .iter()
                     .copied()
                     .find(|f| Some(f.name()) == name);
-                if let (Some(f), Some(path)) = (chosen, self.path.clone()) {
-                    self.open_path_as(&path, Some(f));
+                if let (Some(f), Some(source)) = (chosen, self.source.clone()) {
+                    self.open_source_as(source, Some(f));
                 }
             }
         }
@@ -1153,13 +1285,13 @@ impl App {
 
     /// Offer the formats that can read the current file.
     fn reopen_as(&mut self) {
-        let Some(path) = self.path.clone() else {
+        let Some(source) = self.source.clone() else {
             return;
         };
-        let bytes = match std::fs::read(&path) {
+        let bytes = match self.read_source(&source) {
             Ok(b) => b,
             Err(e) => {
-                self.message = Some(format!("Can't read {}: {e}", path.display()));
+                self.message = Some(format!("Can't read {}: {e}", describe(&source)));
                 return;
             }
         };
@@ -1196,12 +1328,23 @@ impl App {
     pub fn test_save_listing_as(&mut self, path: PathBuf) {
         self.file_job = None;
         self.save_to(PendingSave {
-            path,
+            target: Source::File(path),
+            replace: true,
             format: self.spec.machine.text_format(),
             then: None,
             confirmed: false,
             overwrite: false,
         });
+    }
+
+    /// Test hook: open a document by its recent-files text.
+    pub fn test_open_source(&mut self, text: &str) {
+        self.open_source(Source::from_recent(text));
+    }
+
+    /// Test hook: File > Save.
+    pub fn test_save(&mut self) {
+        self.save(None);
     }
 
     /// Test hook: act as if Save As chose `path`.
@@ -1244,7 +1387,7 @@ impl App {
         if self.prefs.is_some() {
             self.close_prefs();
         }
-        self.dropped = Some(path);
+        self.dropped = Some(Source::File(path));
         self.guard(After::OpenDropped);
     }
 
@@ -1306,15 +1449,26 @@ impl App {
     }
 
     /// Put a file opened or saved at the top of the recent files.
-    fn note_recent(&mut self, path: &Path) {
-        let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        let p = full.to_string_lossy().into_owned();
+    fn note_recent(&mut self, source: &Source) {
+        let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        let full = match source {
+            Source::File(p) => Source::File(absolute(p)),
+            Source::Image { image, path } => Source::Image {
+                image: absolute(image),
+                path: path.clone(),
+            },
+        };
+        let p = full.to_recent();
         for list in [&mut self.opened, &mut self.config.recent] {
             list.retain(|q| q != &p);
             list.insert(0, p.clone());
             list.truncate(config::MAX_RECENT);
         }
-        self.menus = menu::menus(self.alt_charset, &self.config.recent);
+        self.menus = menu::menus(
+            self.alt_charset,
+            &self.config.recent,
+            self.spec.disks.is_some(),
+        );
     }
 
     /// File > (recent file `n`): open it, after "Save changes?".
@@ -1322,15 +1476,23 @@ impl App {
         let Some(p) = self.config.recent.get(n).cloned() else {
             return;
         };
-        let path = PathBuf::from(&p);
-        if !path.is_file() {
-            self.message = Some(format!("{p} is no longer there"));
+        let source = Source::from_recent(&p);
+        if !source.host().is_file() {
+            let gone = match &source {
+                Source::File(_) => p.clone(),
+                Source::Image { image, .. } => image.to_string_lossy().into_owned(),
+            };
+            self.message = Some(format!("{gone} is no longer there"));
             self.config.recent.retain(|q| q != &p);
             self.opened.retain(|q| q != &p);
-            self.menus = menu::menus(self.alt_charset, &self.config.recent);
+            self.menus = menu::menus(
+                self.alt_charset,
+                &self.config.recent,
+                self.spec.disks.is_some(),
+            );
             return;
         }
-        self.dropped = Some(path);
+        self.dropped = Some(source);
         self.guard(After::OpenDropped);
     }
 
@@ -1342,28 +1504,45 @@ impl App {
         Some((m.modified().ok()?, m.len()))
     }
 
-    /// Whether another program has changed the file since it was read or
-    /// written here.
+    /// Whether another program has changed the file (or the disk image
+    /// it's in) since it was read or written here.
     fn changed_on_disk(&self) -> bool {
-        match (&self.path, self.disk_stamp) {
-            (Some(path), Some(old)) => Self::stamp(path).is_some_and(|now| now != old),
+        match (&self.source, self.disk_stamp) {
+            (Some(source), Some(old)) => Self::stamp(source.host()).is_some_and(|now| now != old),
             _ => false,
         }
     }
 
     /// The window became active again: if another program changed the
-    /// file, reload it (asking first if there are unsaved changes).
+    /// file, reload it (asking first if there are unsaved changes). For a
+    /// file in a disk image, only a change to that file counts: other
+    /// files in the image may change freely.
     pub fn check_disk(&mut self) {
         if self.dialog.is_some() || self.file_job.is_some() || !self.changed_on_disk() {
             return;
         }
-        let Some(path) = self.path.clone() else {
+        let Some(source) = self.source.clone() else {
             return;
         };
+        if let Source::Image { image, .. } = &source {
+            match self.read_source(&source) {
+                Ok(bytes) if Some(&bytes) == self.image_copy.as_ref() => {
+                    self.disk_stamp = Self::stamp(image);
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    // Say so once, and keep what's here; Save puts it back.
+                    self.disk_stamp = Self::stamp(image);
+                    self.message = Some(format!("Can't read {}: {e}", source.label()));
+                    return;
+                }
+            }
+        }
         if self.editor.doc.is_modified() {
             self.dialog = Some(Dialog::changed_on_disk(&self.file_name()));
         } else {
-            self.open_path(&path);
+            self.open_source(source);
             self.message = Some(format!(
                 "Reloaded {}: another program changed it",
                 self.file_name()
@@ -1715,6 +1894,149 @@ impl App {
             .unwrap_or_default();
         self.find_field = self.field_editor(codes);
         self.find_next(true, layout);
+    }
+
+    // ----- open from image -------------------------------------------------------
+
+    /// File > Open from Image: show the page on the image last used (the
+    /// document's own, else the latest in the recent files), or ask for
+    /// one.
+    fn open_image_page(&mut self) {
+        self.image_page = Some(ImagePage::new());
+        let own = match &self.source {
+            Some(Source::Image { image, .. }) => Some(image.clone()),
+            _ => None,
+        };
+        let recent = || {
+            self.config
+                .recent
+                .iter()
+                .find_map(|r| match Source::from_recent(r) {
+                    Source::Image { image, .. } if image.is_file() => Some(image),
+                    _ => None,
+                })
+        };
+        match own.or_else(recent) {
+            Some(image) => self.load_image_page(image),
+            None => self.start_file_job(FileJobKind::ChooseImage),
+        }
+    }
+
+    /// The OS dialog for choosing a disk image.
+    fn image_dialog(&self) -> rfd::FileDialog {
+        let mut d = rfd::FileDialog::new().set_title("Choose Image");
+        // As for Open: the macOS panel has no file-type menu, so a filter
+        // there would hide every other file with no way to show them.
+        if let Some(disks) = self
+            .spec
+            .disks
+            .as_ref()
+            .filter(|_| !cfg!(target_os = "macos"))
+        {
+            let exts: Vec<String> = disks
+                .extensions()
+                .iter()
+                .flat_map(|e| [e.to_ascii_uppercase(), e.to_ascii_lowercase()])
+                .collect();
+            let shown: Vec<String> = disks.extensions().iter().map(|e| format!(".{e}")).collect();
+            d = d.add_filter(format!("{} ({})", disks.name(), shown.join(", ")), &exts);
+        }
+        if !cfg!(target_os = "macos") {
+            d = d.add_filter("All files", &["*"]);
+        }
+        // Beside the image shown, if any.
+        match self
+            .image_page
+            .as_ref()
+            .and_then(|p| p.image.as_ref())
+            .and_then(|i| i.parent())
+            .filter(|d| d.is_dir())
+        {
+            Some(dir) => d.set_directory(dir),
+            None => self.in_start_dir(d, false),
+        }
+    }
+
+    /// Read `image` and show it on the page. When the document came from
+    /// it, start in the document's directory with its file selected.
+    fn load_image_page(&mut self, image: PathBuf) {
+        let vol = self.open_image(&image);
+        let Some(p) = &mut self.image_page else {
+            return;
+        };
+        match vol {
+            Ok(vol) => {
+                let top = self
+                    .spec
+                    .disks
+                    .as_ref()
+                    .map_or(b"/".to_vec(), |d| d.top_directory().to_vec());
+                p.load(image.clone(), vol.as_ref(), top);
+                if let Some(Source::Image { image: own, path }) = &self.source
+                    && *own == image
+                    && let Some((name, dir)) = path.split_last()
+                {
+                    p.select_path(dir, name);
+                }
+            }
+            Err(e) => p.failed(image, e.to_string()),
+        }
+    }
+
+    /// Do what the page asked.
+    fn image_action(&mut self, action: image_page::Action) {
+        use image_page::Action as A;
+        match action {
+            A::None => {}
+            A::Close => self.image_page = None,
+            A::Choose => self.start_file_job(FileJobKind::ChooseImage),
+            A::Open => {
+                let Some(p) = &self.image_page else { return };
+                let (Some(image), Some(path)) = (p.image.clone(), p.selected_file()) else {
+                    return;
+                };
+                let source = Source::Image { image, path };
+                // Keep the page if the file can't be read, saying why.
+                if let Err(e) = self.read_source(&source) {
+                    if let Some(p) = &mut self.image_page {
+                        p.error = Some(format!("{}: {e}", source.name()));
+                    }
+                    return;
+                }
+                self.image_page = None;
+                self.note_folder(source.host());
+                self.open_source(source);
+            }
+        }
+    }
+
+    /// Test hook: File > Open from Image (without "Save changes?"),
+    /// showing `image` if given.
+    pub fn test_open_image_page(&mut self, image: Option<PathBuf>) {
+        match image {
+            Some(image) => {
+                self.image_page = Some(ImagePage::new());
+                self.load_image_page(image);
+            }
+            None => self.open_image_page(),
+        }
+    }
+
+    /// Test hook: keys on the Open from Image page, e.g. "down,down,tab".
+    pub fn test_image_keys(&mut self, keys: &str) {
+        for k in keys.split(',').map(str::trim) {
+            let (shift, name) = match k.strip_prefix("shift+") {
+                Some(n) => (true, n),
+                None => (false, k),
+            };
+            let Some(code) = Keycode::from_name(name) else {
+                continue;
+            };
+            if let Some(p) = &mut self.image_page {
+                let action = p.key(code, shift);
+                self.image_action(action);
+            }
+        }
     }
 
     // ----- fonts -----------------------------------------------------------------
@@ -2310,7 +2632,7 @@ impl App {
             Cut | Copy => self.editor.has_selection(),
             Paste => clipboard.has_clipboard_text(),
             // Only without unsaved changes, which reopening would lose.
-            ReopenAs => self.path.is_some() && !self.editor.doc.is_modified(),
+            ReopenAs => self.source.is_some() && !self.editor.doc.is_modified(),
             _ => true,
         };
         let checked = match c {
@@ -2337,12 +2659,14 @@ impl App {
             || self.prefs.is_some()
             || self.print.is_some()
             || self.fonts.is_some()
+            || self.image_page.is_some()
         {
             return;
         }
         match c {
             New => self.guard(After::New),
             Open => self.guard(After::Open),
+            OpenFromImage => self.guard(After::OpenFromImage),
             Import => self.guard(After::Import),
             ReopenAs => self.reopen_as(),
             Save => self.save(None),
@@ -2569,7 +2893,7 @@ impl App {
             self.prefs_text(text);
             return false;
         }
-        if self.print.is_some() || self.fonts.is_some() {
+        if self.print.is_some() || self.fonts.is_some() || self.image_page.is_some() {
             return false;
         }
         // The Find panel: text goes to an Atari field the normal way.
@@ -2705,6 +3029,12 @@ impl App {
         }
         if self.fonts.is_some() {
             self.fonts_key(k, shift);
+            self.swallow_text = true;
+            return false;
+        }
+        if let Some(p) = &mut self.image_page {
+            let action = p.key(k, shift);
+            self.image_action(action);
             self.swallow_text = true;
             return false;
         }
@@ -2925,7 +3255,7 @@ impl App {
             .position_at(&self.editor.doc, abs, col.max(0) as usize)
     }
 
-    pub fn mouse_down(&mut self, x: i32, y: i32, shift: bool, f: &Frame) {
+    pub fn mouse_down(&mut self, x: i32, y: i32, shift: bool, clicks: u8, f: &Frame) {
         if self.file_job.is_some() {
             return;
         }
@@ -2973,6 +3303,11 @@ impl App {
             }
             return;
         }
+        if let Some(p) = &mut self.image_page {
+            let action = p.click(x, y, clicks >= 2);
+            self.image_action(action);
+            return;
+        }
         // The Find panel stays open while clicking in the text.
         if self.find_click(x, y, shift, f) {
             return;
@@ -3001,6 +3336,7 @@ impl App {
             || self.prefs.is_some()
             || self.print.is_some()
             || self.fonts.is_some()
+            || self.image_page.is_some()
             || y < f.text_top
             || y >= f.status_top
         {
@@ -3055,8 +3391,11 @@ impl App {
         }
     }
 
-    pub fn wheel(&mut self, dy: i32, f: &Frame) {
-        if self.overlay == Overlay::None {
+    /// The mouse wheel, `dy` notches (up positive), the pointer at `at`.
+    pub fn wheel(&mut self, dy: i32, (x, y): (i32, i32), f: &Frame) {
+        if let Some(p) = &mut self.image_page {
+            p.wheel(x, y, dy);
+        } else if self.overlay == Overlay::None {
             self.editor.scroll_by(-dy as isize * 3, &f.layout);
         } else {
             self.overlay_top = (self.overlay_top as isize - dy as isize * 3).max(0) as usize;
@@ -3165,6 +3504,33 @@ fn home_dir() -> Option<PathBuf> {
         .filter_map(std::env::var_os)
         .map(PathBuf::from)
         .find(|d| d.is_dir())
+}
+
+/// Why a document couldn't be read or written.
+#[derive(Debug)]
+enum SourceError {
+    /// Reading or writing the file (or the image file) failed.
+    Io(std::io::Error),
+    /// The disk image refused: not an image, disk full, locked...
+    Disk(DiskError),
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceError::Io(e) => e.fmt(f),
+            SourceError::Disk(e) => e.fmt(f),
+        }
+    }
+}
+
+/// Where a document is, for messages: the file's path, or the image's
+/// path and the name in it.
+fn describe(source: &Source) -> String {
+    match source {
+        Source::File(p) => p.display().to_string(),
+        Source::Image { image, .. } => format!("{} > {}", image.display(), source.name()),
+    }
 }
 
 /// A file's name from its path, for messages.

@@ -7,6 +7,7 @@
 //! machine's own crate.
 
 pub mod clipboard;
+pub mod disk;
 pub mod document;
 pub mod editor;
 pub mod format;
