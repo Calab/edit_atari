@@ -23,8 +23,8 @@ dependencies = [
 
 [[package]]
 name = "atari-disk"
-version = "0.1.0"
-source = "git+https://github.com/Calab/atari-disk#483d13daa20aed4cab66146f32564c4a7e1229ac"
+version = "1.0.0"
+source = "git+https://github.com/Calab/atari-disk?tag=v1.0.0#954952b4f2b2472603119e02e482b1a8e42e8178"
 
 [[package]]
 name = "atari_editor"

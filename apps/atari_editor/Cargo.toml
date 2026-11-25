@@ -10,7 +10,7 @@ version.workspace = true
 [dependencies]
 atari = { path = "../../crates/atari" }
 # Disk images (ATR/XFD) and their file systems, for the Image Manager.
-atari-disk = { git = "https://github.com/Calab/atari-disk" }
+atari-disk = { git = "https://github.com/Calab/atari-disk", tag = "v1.0.0" }
 retro_core = { path = "../../crates/retro_core" }
 retro_sdl = { path = "../../crates/retro_sdl" }
 
