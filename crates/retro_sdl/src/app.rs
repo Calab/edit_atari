@@ -109,11 +109,12 @@ use crate::config::{self, Config, ControlKey, DirMode};
 use crate::find_page::{self, FindPage};
 use crate::fonts_page::{self, FontsPage};
 use crate::image_page::{self, ImagePage};
+use crate::local_time;
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
 use crate::prefs::{self, Field, Op, Prefs};
 use crate::print_page::{self, PrintPage};
 use crate::source::Source;
-use retro_core::disk::{DiskError, DiskVolume};
+use retro_core::disk::{DiskError, DiskErrorKind, DiskVolume};
 use retro_core::print::{Paper, PrintSettings};
 use retro_core::search;
 
@@ -578,7 +579,8 @@ impl App {
             Source::File(p) => write_atomically(p, bytes).map_err(SourceError::Io),
             Source::Image { image, path } => {
                 let mut vol = self.open_image(image)?;
-                vol.write(path, bytes, replace, None)
+                // Dated now, on disks that keep dates.
+                vol.write(path, bytes, replace, local_time::now())
                     .map_err(SourceError::Disk)?;
                 write_atomically(image, &vol.to_bytes()).map_err(SourceError::Io)
             }
@@ -1014,12 +1016,16 @@ impl App {
     /// * Anything else: the document's format if it can be written, else
     ///   text.
     fn save_as_to(&mut self, path: PathBuf, then: Option<After>) {
+        self.save_as_target(Source::File(path), then);
+    }
+
+    /// Save As (or Save to Image) chose `target`: the format by the rules
+    /// of [`App::save_as_to`]. A file already in a disk image is replaced
+    /// only after asking (the OS dialog has asked about other files).
+    fn save_as_target(&mut self, target: Source, then: Option<After>) {
         let text = self.spec.machine.text_format();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_uppercase();
+        let ext = target.extension().unwrap_or_default().to_ascii_uppercase();
+        let replace = matches!(target, Source::File(_));
         let uses = |f: &&'static dyn FileFormat| {
             f.extension() == ext
                 || f.extensions()
@@ -1028,8 +1034,8 @@ impl App {
                     .any(|x| x.eq_ignore_ascii_case(&ext))
         };
         let pending = |format| PendingSave {
-            target: Source::File(path.clone()),
-            replace: true,
+            target: target.clone(),
+            replace,
             format,
             then,
             confirmed: false,
@@ -1062,8 +1068,7 @@ impl App {
         } else if !writable.is_empty() {
             let mut names: Vec<&'static str> = writable.iter().map(|f| f.name()).collect();
             names.push(text.name());
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-            self.dialog = Some(Dialog::save_as_format(&name.unwrap_or_default(), names));
+            self.dialog = Some(Dialog::save_as_format(&target.name(), names));
             self.pending_save = Some(pending(text));
         } else if let Some(f) = users.first() {
             self.message = Some(format!(
@@ -1127,6 +1132,15 @@ impl App {
                 self.message = Some(format!("Save failed: {e}"));
                 return;
             }
+            // Already in the image: ask first.
+            Err(SourceError::Disk(e))
+                if e.kind == DiskErrorKind::AlreadyExists && !save.replace =>
+            {
+                let image = file_label(&save.target.host().to_string_lossy());
+                self.dialog = Some(Dialog::replace_in_image(&save.target.name(), &image));
+                self.pending_save = Some(save);
+                return;
+            }
             // Disk full, locked, write-protected...: worth a dialog.
             Err(SourceError::Disk(e)) => {
                 let label = save.target.label();
@@ -1143,6 +1157,10 @@ impl App {
         self.note_folder(save.target.host());
         self.disk_stamp = Self::stamp(save.target.host());
         self.note_recent(&save.target);
+        // Saved into an image from Save to Image: the page's job is done.
+        if matches!(save.target, Source::Image { .. }) {
+            self.image_page = None;
+        }
         self.image_copy = match save.target {
             Source::Image { .. } => Some(encoded.bytes.clone()),
             Source::File(_) => None,
@@ -1187,7 +1205,7 @@ impl App {
                 self.message = None;
             }
             After::Open => self.start_file_job(FileJobKind::Open),
-            After::OpenFromImage => self.open_image_page(),
+            After::OpenFromImage => self.open_image_page(image_page::Mode::Open),
             After::Import => self.start_file_job(FileJobKind::Import),
             After::OpenDropped => {
                 if let Some(source) = self.dropped.take() {
@@ -1246,6 +1264,14 @@ impl App {
                 } else if let Some(source) = &self.source {
                     // Keep mine: don't ask again until it changes again.
                     self.disk_stamp = Self::stamp(source.host());
+                }
+            }
+            Purpose::ReplaceInImage => {
+                if let Some(mut save) = self.pending_save.take()
+                    && button == 0
+                {
+                    save.replace = true;
+                    self.save_to(save);
                 }
             }
             Purpose::OverwriteChanged => {
@@ -1901,8 +1927,12 @@ impl App {
     /// File > Open from Image: show the page on the image last used (the
     /// document's own, else the latest in the recent files), or ask for
     /// one.
-    fn open_image_page(&mut self) {
-        self.image_page = Some(ImagePage::new());
+    fn open_image_page(&mut self, mode: image_page::Mode) {
+        let mut page = ImagePage::new(mode);
+        if mode == image_page::Mode::Save {
+            page.set_name(&self.image_name());
+        }
+        self.image_page = Some(page);
         let own = match &self.source {
             Some(Source::Image { image, .. }) => Some(image.clone()),
             _ => None,
@@ -1971,12 +2001,15 @@ impl App {
                     .disks
                     .as_ref()
                     .map_or(b"/".to_vec(), |d| d.top_directory().to_vec());
-                p.load(image.clone(), vol.as_ref(), top);
+                p.load(image.clone(), vol, top);
                 if let Some(Source::Image { image: own, path }) = &self.source
                     && *own == image
                     && let Some((name, dir)) = path.split_last()
                 {
                     p.select_path(dir, name);
+                    if p.mode == image_page::Mode::Save {
+                        p.set_name(name);
+                    }
                 }
             }
             Err(e) => p.failed(image, e.to_string()),
@@ -1990,6 +2023,16 @@ impl App {
             A::None => {}
             A::Close => self.image_page = None,
             A::Choose => self.start_file_job(FileJobKind::ChooseImage),
+            A::MakeDir => self.make_image_dir(),
+            A::Save => {
+                let Some(p) = &self.image_page else { return };
+                let Some(image) = p.image.clone() else { return };
+                let target = Source::Image {
+                    image,
+                    path: p.path_of(&p.name),
+                };
+                self.save_as_target(target, None);
+            }
             A::Open => {
                 let Some(p) = &self.image_page else { return };
                 let (Some(image), Some(path)) = (p.image.clone(), p.selected_file()) else {
@@ -2010,21 +2053,98 @@ impl App {
         }
     }
 
-    /// Test hook: File > Open from Image (without "Save changes?"),
-    /// showing `image` if given.
-    pub fn test_open_image_page(&mut self, image: Option<PathBuf>) {
+    /// Create Directory: make the directory named in the pop-up inside
+    /// the one shown, in a fresh copy of the image, and save the image.
+    /// Then show the new directory; on failure, say why in the pop-up.
+    fn make_image_dir(&mut self) {
+        let Some(p) = &self.image_page else { return };
+        let (Some(image), Some(pop)) = (p.image.clone(), &p.new_dir) else {
+            return;
+        };
+        let path = p.path_of(&pop.name);
+        let done = self.open_image(&image).and_then(|mut vol| {
+            vol.make_dir(&path, local_time::now())
+                .map_err(SourceError::Disk)?;
+            write_atomically(&image, &vol.to_bytes()).map_err(SourceError::Io)
+        });
+        if let Err(e) = done {
+            if let Some(pop) = self.image_page.as_mut().and_then(|p| p.new_dir.as_mut()) {
+                pop.error = Some(sentence(&e.to_string()));
+            }
+            return;
+        }
+        // The document's own image changed here, not by another program.
+        if self.source.as_ref().map(Source::host) == Some(image.as_path()) {
+            self.disk_stamp = Self::stamp(&image);
+        }
+        // Show it, keeping the name typed in the File name box.
+        let name = self.image_page.as_ref().map(|p| p.name.clone());
+        self.load_image_page(image);
+        if let Some(p) = &mut self.image_page {
+            p.show_path(&path);
+            if let Some(name) = name {
+                p.set_name(&name);
+            }
+        }
+    }
+
+    /// The name Save to Image suggests: the document's own name on the
+    /// disk if it came from an image, otherwise the name Save As would
+    /// suggest, in machine codes (the page cuts it to suit the disk).
+    fn image_name(&self) -> Vec<u8> {
+        if let Some(Source::Image { path, .. }) = &self.source
+            && let Some(name) = path.last()
+        {
+            return name.clone();
+        }
+        let name = match &self.source {
+            Some(_) => self.save_name(),
+            None => with_extension_like("UNTITLED", self.spec.machine.text_format().extension()),
+        };
+        name.chars()
+            .map(|c| self.spec.machine.ascii_code(c))
+            .collect()
+    }
+
+    /// Test hook: File > Open from Image or Save to Image (without "Save
+    /// changes?"), showing `image` if given.
+    pub fn test_open_image_page(&mut self, save: bool, image: Option<PathBuf>) {
+        let mode = if save {
+            image_page::Mode::Save
+        } else {
+            image_page::Mode::Open
+        };
         match image {
             Some(image) => {
-                self.image_page = Some(ImagePage::new());
+                let mut page = ImagePage::new(mode);
+                if save {
+                    page.set_name(&self.image_name());
+                }
+                self.image_page = Some(page);
                 self.load_image_page(image);
             }
-            None => self.open_image_page(),
+            None => self.open_image_page(mode),
+        }
+    }
+
+    /// Test hook: type text on the image page.
+    pub fn test_image_type(&mut self, text: &str) {
+        let codes: Vec<u8> = text
+            .chars()
+            .filter_map(|c| self.spec.machine.code_for_char(c))
+            .collect();
+        if let Some(p) = &mut self.image_page {
+            p.type_codes(&codes);
         }
     }
 
     /// Test hook: keys on the Open from Image page, e.g. "down,down,tab".
     pub fn test_image_keys(&mut self, keys: &str) {
         for k in keys.split(',').map(str::trim) {
+            if let Some(text) = k.strip_prefix("type:") {
+                self.test_image_type(text);
+                continue;
+            }
             let (shift, name) = match k.strip_prefix("shift+") {
                 Some(n) => (true, n),
                 None => (false, k),
@@ -2633,6 +2753,7 @@ impl App {
             Paste => clipboard.has_clipboard_text(),
             // Only without unsaved changes, which reopening would lose.
             ReopenAs => self.source.is_some() && !self.editor.doc.is_modified(),
+            RecentFiles => !self.config.recent.is_empty(),
             _ => true,
         };
         let checked = match c {
@@ -2667,6 +2788,7 @@ impl App {
             New => self.guard(After::New),
             Open => self.guard(After::Open),
             OpenFromImage => self.guard(After::OpenFromImage),
+            SaveToImage => self.open_image_page(image_page::Mode::Save),
             Import => self.guard(After::Import),
             ReopenAs => self.reopen_as(),
             Save => self.save(None),
@@ -2681,6 +2803,7 @@ impl App {
             FindPrevious => self.find_next(false, layout),
             GoToLine => self.open_goto(),
             OpenRecent(n) => self.open_recent(n as usize),
+            RecentFiles => {}
             Quit => self.guard(After::Quit),
             Undo => {
                 self.editor.undo(layout);
@@ -2783,7 +2906,7 @@ impl App {
     pub fn open_menu(&mut self, i: usize) {
         if i < self.menus.len() {
             self.menu.open = Some(i);
-            self.menu.hover = menu::step(&self.menus[i], None, 1);
+            self.menu.hover = menu::step(&self.menus[i].items, None, 1);
         }
     }
 
@@ -2805,10 +2928,55 @@ impl App {
         self.open_items()?.items.get(i)?.command
     }
 
+    /// The items of the hovered item's submenu, if it has one.
+    fn hover_submenu(&self) -> Option<&[menu::Item]> {
+        let it = self.open_items()?.items.get(self.menu.hover?)?;
+        (!it.submenu.is_empty()).then_some(&it.submenu[..])
+    }
+
+    /// The submenu's highlighted item is in use (keys go to it).
+    fn in_submenu(&self) -> bool {
+        self.menu.sub_open && self.menu.sub_hover.is_some()
+    }
+
+    /// Open the hovered item's submenu, highlighting its first item if
+    /// `select`.
+    fn open_submenu(&mut self, select: bool) {
+        if let Some(sub) = self.hover_submenu() {
+            let first = menu::step(sub, None, 1);
+            self.menu.sub_open = true;
+            if select {
+                self.menu.sub_hover = first;
+            }
+        }
+    }
+
+    /// Choose `c` from a menu, if it's enabled: close the menus and do it
+    /// (a submenu item opens its submenu instead).
+    fn choose(&mut self, c: Command, ctx: &Ctx) {
+        if !self.item_state(c, ctx.clipboard).enabled {
+            return;
+        }
+        if c == Command::RecentFiles {
+            self.open_submenu(true);
+            return;
+        }
+        self.close_menu();
+        self.command(c, ctx);
+    }
+
     fn menu_key(&mut self, k: Keycode, ctx: &Ctx) {
         let n = self.menus.len();
         match k {
             Keycode::ESCAPE | Keycode::F10 => self.close_menu(),
+            // Into and out of a submenu.
+            Keycode::RIGHT if !self.in_submenu() && self.hover_submenu().is_some() => {
+                self.open_submenu(true);
+            }
+            Keycode::LEFT if self.in_submenu() => {
+                self.menu.sub_open = false;
+                self.menu.sub_hover = None;
+            }
             Keycode::LEFT | Keycode::RIGHT => {
                 if let Some(open) = self.menu.open {
                     let next = if k == Keycode::LEFT {
@@ -2821,31 +2989,48 @@ impl App {
             }
             Keycode::UP | Keycode::DOWN => {
                 let dir = if k == Keycode::UP { -1 } else { 1 };
-                if let Some(m) = self.open_items() {
-                    self.menu.hover = menu::step(m, self.menu.hover, dir);
+                if self.in_submenu() {
+                    if let Some(sub) = self.hover_submenu() {
+                        self.menu.sub_hover = menu::step(sub, self.menu.sub_hover, dir);
+                    }
+                } else if let Some(m) = self.open_items() {
+                    self.menu.hover = menu::step(&m.items, self.menu.hover, dir);
+                    self.menu.sub_open = false;
+                    self.menu.sub_hover = None;
                 }
             }
             Keycode::RETURN | Keycode::KP_ENTER | Keycode::SPACE => {
-                let cmd = self.menu.hover.and_then(|h| self.open_command(h));
-                self.close_menu();
-                if let Some(c) = cmd {
-                    self.command(c, ctx);
+                let cmd = if self.in_submenu() {
+                    self.hover_submenu()
+                        .and_then(|s| s.get(self.menu.sub_hover?)?.command)
+                } else {
+                    self.menu.hover.and_then(|h| self.open_command(h))
+                };
+                match cmd {
+                    Some(c) => self.choose(c, ctx),
+                    None => self.close_menu(),
                 }
             }
             other => {
-                // The item's underlined hot key chooses it.
+                // The item's underlined hot key chooses it (in the
+                // submenu, if one is in use).
                 let key = char::from_u32(other.into_i32() as u32).map(|c| c.to_ascii_lowercase());
-                let cmd = self.open_items().and_then(|m| {
-                    m.items
+                let items = if self.in_submenu() {
+                    self.hover_submenu()
+                } else {
+                    self.open_items().map(|m| &m.items[..])
+                };
+                let found = items.and_then(|items| {
+                    items
                         .iter()
-                        .find(|it| it.command.is_some() && menu::hot_key(&it.label) == key)
-                        .and_then(|it| it.command)
+                        .position(|it| it.command.is_some() && menu::hot_key(&it.label) == key)
+                        .map(|i| (i, items[i].command.unwrap()))
                 });
-                if let Some(c) = cmd
-                    && self.item_state(c, ctx.clipboard).enabled
-                {
-                    self.close_menu();
-                    self.command(c, ctx);
+                if let Some((i, c)) = found {
+                    if c == Command::RecentFiles {
+                        self.menu.hover = Some(i);
+                    }
+                    self.choose(c, ctx);
                 }
             }
         }
@@ -2893,7 +3078,17 @@ impl App {
             self.prefs_text(text);
             return false;
         }
-        if self.print.is_some() || self.fonts.is_some() || self.image_page.is_some() {
+        if self.image_page.is_some() {
+            let codes: Vec<u8> = text
+                .chars()
+                .filter_map(|c| self.spec.machine.code_for_char(c))
+                .collect();
+            if let Some(p) = &mut self.image_page {
+                p.type_codes(&codes);
+            }
+            return false;
+        }
+        if self.print.is_some() || self.fonts.is_some() {
             return false;
         }
         // The Find panel: text goes to an Atari field the normal way.
@@ -3034,8 +3229,9 @@ impl App {
         }
         if let Some(p) = &mut self.image_page {
             let action = p.key(k, shift);
+            // Typing goes on into the File name box.
+            self.swallow_text = !p.wants_text();
             self.image_action(action);
-            self.swallow_text = true;
             return false;
         }
         // The Find panel takes its own keys; the rest go to its Atari
@@ -3277,7 +3473,7 @@ impl App {
             return;
         }
         if self.menu.is_open() {
-            if !self.geom.in_dropdown(x, y) {
+            if !self.geom.in_dropdown(x, y) && !self.geom.in_sub_dropdown(x, y) {
                 self.close_menu();
             }
             return;
@@ -3363,8 +3559,18 @@ impl App {
                     open: Some(i),
                     ..Default::default()
                 };
+            } else if self.geom.in_sub_dropdown(x, y) {
+                self.menu.sub_hover = self.geom.sub_item_at(x, y);
             } else if self.geom.in_dropdown(x, y) {
-                self.menu.hover = self.geom.item_at(x, y);
+                let hover = self.geom.item_at(x, y);
+                if hover != self.menu.hover {
+                    self.menu.hover = hover;
+                    self.menu.sub_open = false;
+                    self.menu.sub_hover = None;
+                    // Resting on an item with a submenu opens it (an empty
+                    // one, like Recent Files with none yet, doesn't).
+                    self.open_submenu(false);
+                }
             }
             return;
         }
@@ -3380,13 +3586,19 @@ impl App {
             // A click without a drag selects nothing.
             self.editor.clear_selection();
         }
-        if self.menu.is_open() && self.geom.in_dropdown(x, y) {
+        if self.menu.is_open() && self.geom.in_sub_dropdown(x, y) {
+            let cmd = self.geom.sub_item_at(x, y).and_then(|i| {
+                self.hover_submenu()
+                    .and_then(|s| s.get(i))
+                    .and_then(|it| it.command)
+            });
+            if let Some(c) = cmd {
+                self.choose(c, ctx);
+            }
+        } else if self.menu.is_open() && self.geom.in_dropdown(x, y) {
             let cmd = self.geom.item_at(x, y).and_then(|i| self.open_command(i));
-            if let Some(c) = cmd
-                && self.item_state(c, ctx.clipboard).enabled
-            {
-                self.close_menu();
-                self.command(c, ctx);
+            if let Some(c) = cmd {
+                self.choose(c, ctx);
             }
         }
     }

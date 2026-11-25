@@ -14,6 +14,7 @@ pub enum Command {
     New,
     Open,
     OpenFromImage,
+    SaveToImage,
     ReopenAs,
     Import,
     Save,
@@ -21,6 +22,8 @@ pub enum Command {
     SaveListingAs,
     Export,
     Print,
+    /// The Recent Files submenu (it opens; it does nothing itself).
+    RecentFiles,
     /// Open the `n`th recent file.
     OpenRecent(u8),
     Quit,
@@ -59,6 +62,8 @@ pub struct Item {
     pub shortcut: &'static str,
     /// `None` draws a separator line.
     pub command: Option<Command>,
+    /// The items of a submenu that opens beside this one (empty: none).
+    pub submenu: Vec<Item>,
 }
 
 pub struct Menu {
@@ -98,6 +103,7 @@ const fn item(label: &'static str, shortcut: &'static str, c: Command) -> Item {
         label: std::borrow::Cow::Borrowed(label),
         shortcut,
         command: Some(c),
+        submenu: Vec::new(),
     }
 }
 
@@ -105,6 +111,7 @@ const SEP: Item = Item {
     label: std::borrow::Cow::Borrowed(""),
     shortcut: "",
     command: None,
+    submenu: Vec::new(),
 };
 
 /// The menus. `alt_charset` names the machine's second character set, if
@@ -120,11 +127,13 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String], images: bool)
                 item("&New", "Ctrl+N", New),
                 item("&Open...", "Ctrl+O", Open),
                 item("Open from I&mage...", "", OpenFromImage),
+                item("Recent &Files", "", RecentFiles),
                 item("&Reopen As...", "", ReopenAs),
                 item("&Import...", "", Import),
                 SEP,
                 item("&Save", "Ctrl+S", Save),
                 item("Save &As...", "Ctrl+Shift+S", SaveAs),
+                item("Save &to Image...", "", SaveToImage),
                 item("Save &Listing As...", "", SaveListingAs),
                 item("&Export...", "", Export),
                 SEP,
@@ -187,22 +196,26 @@ pub fn menus(alt_charset: Option<&'static str>, recent: &[String], images: bool)
         item("&Go to Line...", "Ctrl+G", GoToLine),
     ]);
     if !images {
-        m[0].items.retain(|i| i.command != Some(OpenFromImage));
+        m[0].items
+            .retain(|i| !matches!(i.command, Some(OpenFromImage | SaveToImage)));
     }
-    // Recent files, numbered, above Quit.
-    if !recent.is_empty() {
-        let quit = m[0].items.len() - 1;
-        let mut items: Vec<Item> = recent_labels(recent)
-            .into_iter()
-            .enumerate()
-            .map(|(i, label)| Item {
-                label: std::borrow::Cow::Owned(label),
-                shortcut: "",
-                command: Some(OpenRecent(i as u8)),
-            })
-            .collect();
-        items.push(SEP);
-        m[0].items.splice(quit..quit, items);
+    // The recent files, numbered, in the Recent Files submenu.
+    let recent: Vec<Item> = recent_labels(recent)
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| Item {
+            label: std::borrow::Cow::Owned(label),
+            shortcut: "",
+            command: Some(OpenRecent(i as u8)),
+            submenu: Vec::new(),
+        })
+        .collect();
+    if let Some(it) = m[0]
+        .items
+        .iter_mut()
+        .find(|it| it.command == Some(RecentFiles))
+    {
+        it.submenu = recent;
     }
     m
 }
@@ -312,6 +325,10 @@ pub struct MenuState {
     /// The right-click menu, opened at this pixel position.
     pub context: Option<(i32, i32)>,
     pub hover: Option<usize>,
+    /// The hovered item's submenu is showing.
+    pub sub_open: bool,
+    /// The highlighted item in that submenu.
+    pub sub_hover: Option<usize>,
 }
 
 impl MenuState {
@@ -335,6 +352,9 @@ pub struct Geometry {
     pub titles: Vec<Rect>,
     pub dropdown: Option<Rect>,
     pub items: Vec<Rect>,
+    /// The open submenu, and its items.
+    pub sub_dropdown: Option<Rect>,
+    pub sub_items: Vec<Rect>,
 }
 
 impl Geometry {
@@ -348,6 +368,14 @@ impl Geometry {
 
     pub fn in_dropdown(&self, x: i32, y: i32) -> bool {
         self.dropdown.is_some_and(|r| r.contains_point((x, y)))
+    }
+
+    pub fn in_sub_dropdown(&self, x: i32, y: i32) -> bool {
+        self.sub_dropdown.is_some_and(|r| r.contains_point((x, y)))
+    }
+
+    pub fn sub_item_at(&self, x: i32, y: i32) -> Option<usize> {
+        self.sub_items.iter().position(|r| r.contains_point((x, y)))
     }
 }
 
@@ -397,35 +425,56 @@ pub fn draw(
         x += w;
     }
 
-    let (menu, left, top) = match (state.open, state.context) {
-        (Some(i), _) => (&menus[i], geom.titles[i].x(), bar_h - 1),
-        (None, Some((x, y))) => (context, x, y),
+    // A menu-bar menu always opens under the bar, never over its title
+    // (where releasing the click that opened it would choose an item).
+    let (menu, left, top, fixed) = match (state.open, state.context) {
+        (Some(i), _) => (&menus[i], geom.titles[i].x(), bar_h - 1, true),
+        (None, Some((x, y))) => (context, x, y, false),
         (None, None) => return geom,
     };
     let (drop, items) = draw_dropdown(
         canvas,
         font,
-        menu,
+        &menu.items,
         state.hover,
-        (left, top),
+        (left, top, fixed),
         (width as i32, height as i32),
         pad,
         item_state,
     );
+    // The hovered item's submenu, beside it.
+    if state.sub_open
+        && let Some(h) = state.hover
+        && let Some(it) = menu.items.get(h).filter(|it| !it.submenu.is_empty())
+    {
+        let (sub, sub_items) = draw_dropdown(
+            canvas,
+            font,
+            &it.submenu,
+            state.sub_hover,
+            (drop.right() - 2, items[h].y() - pad / 4, false),
+            (width as i32, height as i32),
+            pad,
+            item_state,
+        );
+        geom.sub_dropdown = Some(sub);
+        geom.sub_items = sub_items;
+    }
     geom.dropdown = Some(drop);
     geom.items = items;
     geom
 }
 
 /// Draw a menu's items in a box at (left, top), moved if needed to stay
-/// inside the window. Returns the box and each item's rectangle.
+/// inside the window (only sideways if `fixed`). Returns the box and
+/// each item's rectangle.
 #[allow(clippy::too_many_arguments)]
 fn draw_dropdown(
     canvas: &mut Canvas<Window>,
     font: &mut UiFont,
-    menu: &Menu,
+    menu_items: &[Item],
     hover: Option<usize>,
-    (left, top): (i32, i32),
+    (left, top, fixed): (i32, i32, bool),
     (win_w, win_h): (i32, i32),
     pad: i32,
     item_state: &dyn Fn(Command) -> ItemState,
@@ -434,28 +483,29 @@ fn draw_dropdown(
     let row_h = font.line_height() + pad;
     let sep_h = pad;
     let gap = pad * 3;
-    let label_w = menu
-        .items
+    let label_w = menu_items
         .iter()
         .map(|it| font.measure(&plain(&it.label)))
         .max()
         .unwrap_or(0);
-    let short_w = menu
-        .items
+    let short_w = menu_items
         .iter()
         .map(|it| font.measure(&shortcut_text(it.shortcut)))
         .max()
         .unwrap_or(0);
     let check_w = pad * 2;
     let w = check_w + label_w + gap + short_w + pad * 2;
-    let h: i32 = menu
-        .items
+    let h: i32 = menu_items
         .iter()
         .map(|it| if it.command.is_some() { row_h } else { sep_h })
         .sum::<i32>()
         + pad / 2;
     let left = left.min(win_w - w).max(0);
-    let top = top.min(win_h - h).max(0);
+    let top = if fixed {
+        top
+    } else {
+        top.min(win_h - h).max(0)
+    };
     let drop = Rect::new(left, top, w as u32, h as u32);
     canvas.set_draw_color(t.bar);
     let _ = canvas.fill_rect(drop);
@@ -464,7 +514,7 @@ fn draw_dropdown(
 
     let mut rects = Vec::new();
     let mut y = top + pad / 4;
-    for (i, it) in menu.items.iter().enumerate() {
+    for (i, it) in menu_items.iter().enumerate() {
         let Some(cmd) = it.command else {
             let mid = y + sep_h / 2;
             canvas.set_draw_color(t.border);
@@ -501,6 +551,15 @@ fn draw_dropdown(
         let shortcut = shortcut_text(it.shortcut);
         let sw = font.measure(&shortcut);
         font.draw(canvas, left + w - pad - sw, ty, &shortcut, color);
+        if !it.submenu.is_empty() || cmd == Command::RecentFiles {
+            // A small triangle pointing right: there's a submenu.
+            let s = (row_h / 5).max(3);
+            let (ax, ay) = (left + w - pad - s, y + row_h / 2);
+            canvas.set_draw_color(color);
+            for i in 0..=s {
+                let _ = canvas.draw_line((ax + i, ay - s + i), (ax + i, ay + s - i));
+            }
+        }
         rects.push(r);
         y += row_h;
     }
@@ -508,12 +567,12 @@ fn draw_dropdown(
 }
 
 /// The next selectable item after `from` in direction `dir` (+1 / -1).
-pub fn step(menu: &Menu, from: Option<usize>, dir: isize) -> Option<usize> {
-    let n = menu.items.len() as isize;
+pub fn step(items: &[Item], from: Option<usize>, dir: isize) -> Option<usize> {
+    let n = items.len() as isize;
     let mut i = from.map_or(if dir > 0 { -1 } else { n }, |f| f as isize);
     for _ in 0..n {
         i = (i + dir).rem_euclid(n);
-        if menu.items[i as usize].command.is_some() {
+        if items[i as usize].command.is_some() {
             return Some(i as usize);
         }
     }

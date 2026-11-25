@@ -51,6 +51,8 @@ pub enum Purpose {
     ChangedOnDisk,
     /// Saving over a file another program changed: Save Anyway / Cancel.
     OverwriteChanged,
+    /// The name is already in the disk image: Replace / Cancel.
+    ReplaceInImage,
 }
 
 pub struct Dialog {
@@ -88,6 +90,19 @@ impl Dialog {
             buttons: vec!["OK"],
             focus: 0,
             cancel: 0,
+            button_rects: Vec::new(),
+        }
+    }
+
+    /// Buttons: 0 = Replace, 1 = Cancel.
+    pub fn replace_in_image(name: &str, image: &str) -> Self {
+        Self {
+            purpose: Purpose::ReplaceInImage,
+            title: "Replace file?".into(),
+            text: format!("{name} exists in {image}.\nDo you want to replace it?"),
+            buttons: vec!["Replace", "Cancel"],
+            focus: 1,
+            cancel: 1,
             button_rects: Vec::new(),
         }
     }

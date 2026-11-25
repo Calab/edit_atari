@@ -1,10 +1,11 @@
-//! The Open from Image page (File > Open from Image): the image's
+//! The Open from Image and Save to Image pages (File menu): the image's
 //! directories on the left, the chosen directory's files on the right,
-//! names in the machine's own characters.
+//! names in the machine's own characters. Save to Image adds a File name
+//! box.
 //!
-//! The page holds a listing of the whole image, made when the image is
-//! chosen; it never keeps the image open. Opening a file reads the image
-//! file again.
+//! The page holds a copy of the image, read when the image is chosen, for
+//! its listing and to check names. It never writes it: opening or saving
+//! a file reads the image file again.
 
 use std::path::PathBuf;
 
@@ -19,28 +20,34 @@ use crate::render::Grid;
 use crate::ui_font::UiFont;
 use crate::widgets::{Op, Ui};
 
-/// The controls, in Tab order.
+/// Which page this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Open,
+    Save,
+}
+
+/// The controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Tree,
     Files,
+    /// The File name box (Save to Image).
+    Name,
     Choose,
-    Open,
+    NewDir,
+    /// Open, or Save.
+    Go,
     Cancel,
 }
 
-const ORDER: [Field; 5] = [
-    Field::Tree,
-    Field::Files,
-    Field::Choose,
-    Field::Open,
-    Field::Cancel,
-];
-
-const TITLE: &str = "Open from Image";
 const CHOOSE: &str = "Choose Image...";
-const OPEN: &str = "Open";
+const NEW_DIR: &str = "Create Directory...";
+const NEW_IMAGE: &str = "New Image...";
 const CANCEL: &str = "Cancel";
+
+/// The longest name: 8 characters, a dot and 3 more.
+const NAME_MAX: usize = 12;
 
 /// Deepest directory listed (a damaged disk could loop).
 const MAX_DEPTH: usize = 16;
@@ -64,23 +71,49 @@ pub enum Action {
     Choose,
     /// Open the selected file.
     Open,
+    /// Save the document as the name in the File name box.
+    Save,
+    /// Make the directory named in the Create Directory pop-up, inside
+    /// the directory shown.
+    MakeDir,
     Close,
 }
 
+/// The Create Directory pop-up: the name typed, the cursor, and why the
+/// last try failed.
+pub struct NewDirPopup {
+    pub name: Vec<u8>,
+    cursor: usize,
+    pub error: Option<String>,
+    /// Create (true) and Cancel (false), from the last draw.
+    hits: Vec<(Rect, bool)>,
+}
+
 pub struct ImagePage {
+    pub mode: Mode,
     /// The image shown, if one has been chosen.
     pub image: Option<PathBuf>,
+    /// The image as read, for checking names.
+    vol: Option<Box<dyn DiskVolume>>,
     /// "SpartaDOS, 720 sectors of 256 bytes, 312 free".
     pub info: String,
     /// Why the image can't be shown, instead of `info`.
     pub error: Option<String>,
+    write_protected: bool,
+    has_directories: bool,
+    /// The Create Directory pop-up, while it's open.
+    pub new_dir: Option<NewDirPopup>,
     pub tree: Vec<TreeRow>,
     pub has_dates: bool,
     /// The directory shown (an index into `tree`).
     pub dir: usize,
     /// The selected entry of that directory.
     pub selected: usize,
-    focus: usize,
+    /// The File name box: the name in machine codes, and where the
+    /// cursor is in it.
+    pub name: Vec<u8>,
+    cursor: usize,
+    focus: Field,
     tree_top: usize,
     files_top: usize,
     /// Rows each list shows, from the last draw (for Page Up/Down).
@@ -100,16 +133,23 @@ pub struct ImagePage {
 }
 
 impl ImagePage {
-    pub fn new() -> Self {
+    pub fn new(mode: Mode) -> Self {
         Self {
+            mode,
             image: None,
+            vol: None,
             info: String::new(),
             error: None,
+            write_protected: false,
+            has_directories: false,
+            new_dir: None,
             tree: Vec::new(),
             has_dates: false,
             dir: 0,
             selected: 0,
-            focus: 1,
+            name: Vec::new(),
+            cursor: 0,
+            focus: Self::first_focus(mode),
             tree_top: 0,
             files_top: 0,
             tree_rows: 1,
@@ -122,35 +162,51 @@ impl ImagePage {
         }
     }
 
+    fn first_focus(mode: Mode) -> Field {
+        match mode {
+            Mode::Open => Field::Files,
+            Mode::Save => Field::Name,
+        }
+    }
+
     /// Show `vol`, read from `image`. `top` is how the top directory is
     /// shown, in machine codes.
-    pub fn load(&mut self, image: PathBuf, vol: &dyn DiskVolume, top: Vec<u8>) {
+    pub fn load(&mut self, image: PathBuf, vol: Box<dyn DiskVolume>, top: Vec<u8>) {
         self.image = Some(image);
         self.error = None;
         self.info = vol.info();
-        if vol.write_protected() {
+        self.write_protected = vol.write_protected();
+        if self.write_protected {
             self.info.push_str(", write-protected");
         }
         self.has_dates = vol.has_dates();
+        self.has_directories = vol.has_directories();
+        self.new_dir = None;
         self.tree.clear();
-        self.add_dir(vol, Vec::new(), top, 0);
+        self.add_dir(vol.as_ref(), Vec::new(), top, 0);
+        self.vol = Some(vol);
         self.dir = 0;
         self.selected = 0;
         self.tree_top = 0;
         self.files_top = 0;
-        self.focus = 1;
+        self.focus = Self::first_focus(self.mode);
         self.follow = true;
+        // The name, as this disk's names allow.
+        let name = std::mem::take(&mut self.name);
+        self.set_name(&name);
     }
 
     /// The image couldn't be read or opened.
     pub fn failed(&mut self, image: PathBuf, why: String) {
         self.image = Some(image);
+        self.vol = None;
+        self.new_dir = None;
         self.error = Some(why);
         self.info.clear();
         self.tree.clear();
         self.dir = 0;
         self.selected = 0;
-        self.focus = ORDER.iter().position(|&f| f == Field::Choose).unwrap();
+        self.focus = Field::Choose;
     }
 
     fn add_dir(&mut self, vol: &dyn DiskVolume, path: Vec<Vec<u8>>, label: Vec<u8>, depth: usize) {
@@ -202,9 +258,189 @@ impl ImagePage {
         if e.is_dir {
             return None;
         }
-        let mut path = self.tree[self.dir].path.clone();
-        path.push(e.name.clone());
-        Some(path)
+        Some(self.path_of(&e.name))
+    }
+
+    /// The path of `name` in the directory shown.
+    pub fn path_of(&self, name: &[u8]) -> Vec<Vec<u8>> {
+        let mut path = self
+            .tree
+            .get(self.dir)
+            .map_or(Vec::new(), |t| t.path.clone());
+        path.push(name.to_vec());
+        path
+    }
+
+    // ----- the File name box ---------------------------------------------------
+
+    /// Put `name` in the File name box: as it is if a file in the
+    /// directory shown has exactly that name (so an odd name made by
+    /// another program can be replaced), otherwise only the characters
+    /// this disk's names allow (lower case as capitals), cut to 8.3.
+    pub fn set_name(&mut self, name: &[u8]) {
+        let existing = self.entries().iter().any(|e| !e.is_dir && e.name == name);
+        self.name = if existing {
+            name.to_vec()
+        } else {
+            let dot = name.iter().rposition(|&c| c == b'.');
+            let (base, ext) = match dot {
+                Some(d) => (&name[..d], &name[d + 1..]),
+                None => (name, &[][..]),
+            };
+            let keep = |part: &[u8], n: usize| -> Vec<u8> {
+                part.iter()
+                    .filter(|&&c| c != b'.')
+                    .filter_map(|&c| self.name_char(c))
+                    .take(n)
+                    .collect()
+            };
+            let mut out = keep(base, 8);
+            let ext = keep(ext, 3);
+            if !ext.is_empty() {
+                out.push(b'.');
+                out.extend(ext);
+            }
+            out
+        };
+        self.cursor = self.name.len();
+    }
+
+    /// A typed character as it goes in a name, or `None`.
+    fn name_char(&self, code: u8) -> Option<u8> {
+        match &self.vol {
+            Some(v) => v.name_char(code),
+            None => match code {
+                b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' => Some(code),
+                b'a'..=b'z' => Some(code.to_ascii_uppercase()),
+                _ => None,
+            },
+        }
+    }
+
+    /// Text typed while the page is open, in machine codes: into the
+    /// File name box if it has the focus.
+    pub fn type_codes(&mut self, codes: &[u8]) {
+        let codes: Vec<u8> = codes.iter().filter_map(|&c| self.name_char(c)).collect();
+        let (name, cursor) = match &mut self.new_dir {
+            Some(p) => (&mut p.name, &mut p.cursor),
+            None if self.focus == Field::Name => (&mut self.name, &mut self.cursor),
+            None => return,
+        };
+        for c in codes {
+            if name.len() >= NAME_MAX {
+                break;
+            }
+            name.insert(*cursor, c);
+            *cursor += 1;
+        }
+    }
+
+    /// Whether typed text is wanted (a name box has the focus).
+    pub fn wants_text(&self) -> bool {
+        self.new_dir.is_some() || self.focus == Field::Name
+    }
+
+    /// Why the name in the box can't be saved as, if it can't: `Some("")`
+    /// when there's nothing to say (an empty box).
+    pub fn name_problem(&self) -> Option<String> {
+        self.problem_with(&self.name, false)
+    }
+
+    /// Why `name` can't be used for a new file (`dir` false; an existing
+    /// file may be replaced) or directory, if it can't.
+    fn problem_with(&self, name: &[u8], dir: bool) -> Option<String> {
+        if name.is_empty() {
+            return Some(String::new());
+        }
+        if let Some(e) = self.entries().iter().find(|e| e.name == name) {
+            return match (dir, e.is_dir) {
+                (false, false) => None,
+                (false, true) => Some("That's the name of a directory".into()),
+                (true, _) => Some("That name is already in this directory".into()),
+            };
+        }
+        let vol = self.vol.as_ref()?;
+        vol.check_name(name).err().map(|e| {
+            // "bad name: X: why" -> "Why".
+            let why = e.message.rsplit(": ").next().unwrap_or(&e.message);
+            let mut c = why.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Whether Create Directory can be pressed.
+    fn can_make_dir(&self) -> bool {
+        self.vol.is_some() && self.has_directories && !self.write_protected
+    }
+
+    /// Open the Create Directory pop-up.
+    fn open_new_dir(&mut self) {
+        if self.can_make_dir() {
+            self.new_dir = Some(NewDirPopup {
+                name: Vec::new(),
+                cursor: 0,
+                error: None,
+                hits: Vec::new(),
+            });
+        }
+    }
+
+    /// Why the pop-up's name can't be used, if it can't.
+    fn new_dir_problem(&self) -> Option<String> {
+        let p = self.new_dir.as_ref()?;
+        self.problem_with(&p.name, true)
+    }
+
+    /// The directory was made: close the pop-up and show it (after the
+    /// app has loaded the image again).
+    pub fn show_path(&mut self, path: &[Vec<u8>]) {
+        if let Some(d) = self.tree.iter().position(|t| t.path == path) {
+            self.show_dir(d);
+        }
+    }
+
+    /// Whether Save can be pressed.
+    fn can_save(&self) -> bool {
+        self.vol.is_some() && !self.write_protected && self.name_problem().is_none()
+    }
+
+    // ----- focus and keys ------------------------------------------------------
+
+    /// The controls in Tab order, leaving out greyed-out ones.
+    fn order(&self) -> Vec<Field> {
+        match self.mode {
+            Mode::Open => vec![
+                Field::Tree,
+                Field::Files,
+                Field::Choose,
+                Field::Go,
+                Field::Cancel,
+            ],
+            Mode::Save => {
+                let mut v = vec![Field::Tree, Field::Files, Field::Name, Field::Choose];
+                if self.can_make_dir() {
+                    v.push(Field::NewDir);
+                }
+                if self.can_save() {
+                    v.push(Field::Go);
+                }
+                v.push(Field::Cancel);
+                v
+            }
+        }
+    }
+
+    pub fn focused(&self) -> Field {
+        self.focus
+    }
+
+    fn move_focus(&mut self, step: isize) {
+        let order = self.order();
+        let i = order.iter().position(|&f| f == self.focus).unwrap_or(0) as isize;
+        let n = order.len() as isize;
+        self.focus = order[(i + step).rem_euclid(n) as usize];
     }
 
     fn show_dir(&mut self, d: usize) {
@@ -216,20 +452,43 @@ impl ImagePage {
         }
     }
 
-    /// Enter the selected directory, or ask to open the selected file.
+    /// Enter the selected directory; on a file, open it or save as it.
     fn activate(&mut self) -> Action {
         let Some(e) = self.entries().get(self.selected) else {
             return Action::None;
         };
         if !e.is_dir {
-            return Action::Open;
+            return match self.mode {
+                Mode::Open => Action::Open,
+                Mode::Save => {
+                    let name = e.name.clone();
+                    self.set_name(&name);
+                    self.save()
+                }
+            };
         }
-        let mut path = self.tree[self.dir].path.clone();
-        path.push(e.name.clone());
+        let path = self.path_of(&e.name.clone());
         if let Some(d) = self.tree.iter().position(|t| t.path == path) {
             self.show_dir(d);
         }
         Action::None
+    }
+
+    /// Save, if the name allows it.
+    fn save(&self) -> Action {
+        if self.can_save() {
+            Action::Save
+        } else {
+            Action::None
+        }
+    }
+
+    /// The Open or Save button.
+    fn go(&mut self) -> Action {
+        match self.mode {
+            Mode::Open => self.activate(),
+            Mode::Save => self.save(),
+        }
     }
 
     /// Up to the parent directory, selecting the one just left.
@@ -242,33 +501,37 @@ impl ImagePage {
         self.select_path(&up, &name);
     }
 
-    pub fn focused(&self) -> Field {
-        ORDER[self.focus]
-    }
-
-    fn focus_on(&mut self, f: Field) {
-        self.focus = ORDER.iter().position(|&o| o == f).unwrap_or(0);
-    }
-
     /// A key while the page is open; every key is used up.
     pub fn key(&mut self, k: sdl2::keyboard::Keycode, shift: bool) -> Action {
         use sdl2::keyboard::Keycode as K;
+        // The pop-up takes every key while it's open.
+        if self.new_dir.is_some() {
+            let ok = self.new_dir_problem().is_none();
+            let p = self.new_dir.as_mut().unwrap();
+            match k {
+                K::ESCAPE => self.new_dir = None,
+                K::RETURN | K::KP_ENTER if ok => return Action::MakeDir,
+                _ => edit_name(&mut p.name, &mut p.cursor, k),
+            }
+            return Action::None;
+        }
         if k == K::ESCAPE {
             return Action::Close;
         }
         if k == K::TAB {
-            let n = ORDER.len() as isize;
-            let step = if shift { -1 } else { 1 };
-            self.focus = (self.focus as isize + step).rem_euclid(n) as usize;
+            self.move_focus(if shift { -1 } else { 1 });
             return Action::None;
         }
-        let f = self.focused();
-        let press = matches!(k, K::RETURN | K::KP_ENTER | K::SPACE);
+        let enter = matches!(k, K::RETURN | K::KP_ENTER);
+        let press = enter || k == K::SPACE;
         self.follow = true;
-        match f {
+        match self.focus {
             Field::Choose if press => return Action::Choose,
-            Field::Open if press => return self.activate(),
+            Field::NewDir if press => self.open_new_dir(),
+            Field::Go if press => return self.go(),
             Field::Cancel if press => return Action::Close,
+            Field::Name if enter => return self.save(),
+            Field::Name => edit_name(&mut self.name, &mut self.cursor, k),
             Field::Tree => {
                 let n = self.tree.len();
                 let to = match k {
@@ -279,7 +542,7 @@ impl ImagePage {
                     K::PAGEUP => Some(self.dir.saturating_sub(self.tree_rows)),
                     K::PAGEDOWN => Some(self.dir + self.tree_rows),
                     K::RIGHT | K::RETURN | K::KP_ENTER => {
-                        self.focus_on(Field::Files);
+                        self.focus = Field::Files;
                         None
                     }
                     _ => None,
@@ -297,7 +560,7 @@ impl ImagePage {
                     K::END => n.checked_sub(1),
                     K::PAGEUP => Some(self.selected.saturating_sub(self.files_rows)),
                     K::PAGEDOWN => Some(self.selected + self.files_rows),
-                    K::RETURN | K::KP_ENTER => return self.activate(),
+                    _ if enter => return self.activate(),
                     K::BACKSPACE | K::LEFT => {
                         self.parent();
                         None
@@ -306,6 +569,7 @@ impl ImagePage {
                 };
                 if let Some(i) = to.filter(|_| n > 0) {
                     self.selected = i.min(n - 1);
+                    self.pick_name();
                 }
             }
             _ => {}
@@ -313,19 +577,40 @@ impl ImagePage {
         Action::None
     }
 
+    /// Saving: a file chosen in the list puts its name in the box.
+    fn pick_name(&mut self) {
+        if self.mode != Mode::Save {
+            return;
+        }
+        if let Some(e) = self.entries().get(self.selected).filter(|e| !e.is_dir) {
+            let name = e.name.clone();
+            self.set_name(&name);
+        }
+    }
+
     /// A left click; `double` for a double click.
     pub fn click(&mut self, x: i32, y: i32, double: bool) -> Action {
+        // The pop-up: only its buttons work while it's open.
+        if let Some(p) = &self.new_dir {
+            match p.hits.iter().find(|(r, _)| r.contains_point((x, y))) {
+                Some(&(_, true)) => return Action::MakeDir,
+                Some(&(_, false)) => self.new_dir = None,
+                None => {}
+            }
+            return Action::None;
+        }
         if let Some(&(_, list, step)) = self.arrows.iter().find(|(r, ..)| r.contains_point((x, y)))
         {
             self.scroll(list, step);
             return Action::None;
         }
         if let Some(&(_, list, row)) = self.rows.iter().find(|(r, ..)| r.contains_point((x, y))) {
-            self.focus_on(list);
+            self.focus = list;
             match list {
                 Field::Tree => self.show_dir(row),
                 _ => {
                     self.selected = row;
+                    self.pick_name();
                     if double {
                         return self.activate();
                     }
@@ -334,10 +619,14 @@ impl ImagePage {
             return Action::None;
         }
         if let Some(&(_, f, _)) = self.hits.iter().find(|(r, ..)| r.contains_point((x, y))) {
-            self.focus_on(f);
+            self.focus = f;
             return match f {
                 Field::Choose => Action::Choose,
-                Field::Open => self.activate(),
+                Field::NewDir => {
+                    self.open_new_dir();
+                    Action::None
+                }
+                Field::Go => self.go(),
                 Field::Cancel => Action::Close,
                 _ => Action::None,
             };
@@ -348,6 +637,9 @@ impl ImagePage {
     /// The mouse wheel: scroll the list under the pointer (`dy` notches,
     /// up positive).
     pub fn wheel(&mut self, x: i32, y: i32, dy: i32) {
+        if self.new_dir.is_some() {
+            return;
+        }
         // Over the directories: those. Anywhere else: the files.
         let list = if self.tree_area.contains_point((x, y)) {
             Field::Tree
@@ -374,6 +666,8 @@ impl ImagePage {
         *top = (*top as isize + step).clamp(0, max) as usize;
     }
 
+    // ----- drawing -------------------------------------------------------------
+
     /// Draw the page over the window, names in `cell`-pixel characters
     /// from `atlas`.
     #[allow(clippy::too_many_arguments)]
@@ -393,6 +687,11 @@ impl ImagePage {
         let _ = canvas.fill_rect(None);
         canvas.set_blend_mode(BlendMode::NONE);
 
+        let saving = self.mode == Mode::Save;
+        let (title, go_label) = match self.mode {
+            Mode::Open => ("Open from Image", "Open"),
+            Mode::Save => ("Save to Image", "Save"),
+        };
         let lh = font.line_height();
         let row_h = lh.max(cell) + pad;
         let button = |font: &mut UiFont, s: &str| font.measure(s) + pad * 4;
@@ -413,7 +712,7 @@ impl ImagePage {
         let w = want_w
             .max(font.measure("M") * 36)
             .min(width as i32 - pad * 4);
-        let h = (height as i32 - pad * 8).max(row_h * 8);
+        let h = (height as i32 - pad * 8).max(row_h * 10);
         let x0 = (width as i32 - w) / 2;
         let y0 = ((height as i32 - h) / 2).max(0);
         // The directories give up room first when the window is narrow.
@@ -428,20 +727,21 @@ impl ImagePage {
         canvas.set_draw_color(t.border);
         let _ = canvas.draw_line((x0, y0 + title_h), (x0 + w - 1, y0 + title_h));
         let _ = canvas.draw_rect(frame);
-        font.draw(canvas, x0 + pad * 4, y0 + pad, TITLE, t.text);
+        font.draw(canvas, x0 + pad * 4, y0 + pad, title, t.text);
 
         let mut hits = std::mem::take(&mut self.hits);
         hits.clear();
         self.rows.clear();
         self.arrows.clear();
         let focus = self.focused();
+        let can_save = self.can_save();
+        let problem = if saving { self.name_problem() } else { None };
         let lx = x0 + pad * 4;
         let rx = x0 + w - pad * 4;
         let mut y = y0 + title_h + pad * 3;
 
-        // Image: path ......... [Choose Image...]
         // Names to draw in the machine's characters: where, what, colour,
-        // and the list box they're clipped to.
+        // and the box they're clipped to.
         let glyphs: Vec<(i32, i32, Vec<u8>, Color, Rect)>;
         {
             let mut ui = Ui {
@@ -454,6 +754,7 @@ impl ImagePage {
                 rings: Vec::new(),
                 in_row: |f| f == Field::Choose,
             };
+            // Image: path ......... [Choose Image...]
             let cw = button(ui.font, CHOOSE);
             ui.button_w(Field::Choose, rx - cw, y, cw, CHOOSE);
             let label = "Image:";
@@ -479,10 +780,12 @@ impl ImagePage {
             };
             y += lh + pad * 3;
 
-            // The two lists.
+            // The two lists, above the File name row (saving) and the
+            // buttons.
             let button_h = lh + pad * 2;
+            let name_row_h = if saving { row_h + pad * 3 } else { 0 };
             let list_top = y + lh + pad;
-            let list_h = (y0 + h - pad * 3 - button_h - pad * 3 - list_top).max(row_h);
+            let list_h = (y0 + h - pad * 3 - button_h - pad * 3 - name_row_h - list_top).max(row_h);
             let tree_box = Rect::new(lx, list_top, tree_w as u32, list_h as u32);
             let files_x = lx + tree_w + pad * 4;
             let files_box = Rect::new(
@@ -526,7 +829,6 @@ impl ImagePage {
                 g.push((gx, ry + (row_h - cell) / 2, row.label.clone(), fg, tree_box));
                 self.rows.push((r, Field::Tree, i));
             }
-
             ui.canvas.set_clip_rect(None);
             let more = (self.tree_top > 0, self.tree_top + rows < self.tree.len());
             self.arrows.extend(scroll_arrows(
@@ -581,10 +883,7 @@ impl ImagePage {
                     ui.font.draw(ui.canvas, files_x + pad * 2, ty, "*", fg);
                 }
                 // NAME EXT, as DOS lists them.
-                let (base, ext) = match e.name.iter().rposition(|&c| c == b'.') {
-                    Some(d) => (&e.name[..d], &e.name[d + 1..]),
-                    None => (&e.name[..], &[][..]),
-                };
+                let (base, ext) = split_name(&e.name);
                 let gy = ry + (row_h - cell) / 2;
                 g.push((name_x, gy, base.to_vec(), fg, files_box));
                 g.push((name_x + cell * 9, gy, ext.to_vec(), fg, files_box));
@@ -620,13 +919,66 @@ impl ImagePage {
                 ));
             }
 
-            // Buttons along the bottom.
+            // File name: [SAMPLE.LST  ]  why it can't be used
+            if saving {
+                let ny = list_top + list_h + pad * 3;
+                let label = "File name:";
+                ui.font
+                    .draw(ui.canvas, lx, ny + (row_h - lh) / 2, label, t.text);
+                let bx = lx + ui.font.measure(label) + pad * 3;
+                let field_w = cell * NAME_MAX as i32 + cell + pad * 2;
+                let r = Rect::new(bx, ny, field_w as u32, row_h as u32);
+                ui.canvas.set_draw_color(Color::RGB(0xFF, 0xFF, 0xFF));
+                let _ = ui.canvas.fill_rect(r);
+                ui.field_box(Field::Name, r);
+                let gx = bx + pad;
+                let gy = ny + (row_h - cell) / 2;
+                g.push((gx, gy, self.name.clone(), t.text, r));
+                if focus == Field::Name {
+                    // A block cursor, the character under it reversed.
+                    let cx = gx + self.cursor as i32 * cell;
+                    ui.canvas.set_draw_color(t.text);
+                    let _ = ui
+                        .canvas
+                        .fill_rect(Rect::new(cx, gy, cell as u32, cell as u32));
+                    if let Some(&c) = self.name.get(self.cursor) {
+                        g.push((cx, gy, vec![c], Color::RGB(0xFF, 0xFF, 0xFF), r));
+                    }
+                }
+                let note = if self.write_protected {
+                    Some("The image is write-protected: it can't be saved to".to_string())
+                } else {
+                    problem.filter(|p| !p.is_empty())
+                };
+                if let Some(note) = note {
+                    let tx = bx + field_w + pad * 4;
+                    ui.font
+                        .draw(ui.canvas, tx, ny + (row_h - lh) / 2, &note, warning);
+                }
+            }
+
+            // Buttons along the bottom: New Directory and New Image at the
+            // left (saving), Open or Save and Cancel at the right.
             let by = y0 + h - pad * 3 - button_h;
+            if saving {
+                let bw = button(ui.font, NEW_DIR);
+                if self.can_make_dir() {
+                    ui.button_w(Field::NewDir, lx, by, bw, NEW_DIR);
+                } else {
+                    ui.button_off(lx, by, bw, NEW_DIR);
+                }
+                let iw = button(ui.font, NEW_IMAGE);
+                ui.button_off(lx + bw + pad * 2, by, iw, NEW_IMAGE);
+            }
             let mut bx = rx;
-            for (f, label) in [(Field::Cancel, CANCEL), (Field::Open, OPEN)] {
+            for (f, label) in [(Field::Cancel, CANCEL), (Field::Go, go_label)] {
                 let bw = button(ui.font, label).max(digit * 8);
                 bx -= bw;
-                ui.button_w(f, bx, by, bw, label);
+                if f == Field::Go && saving && !can_save {
+                    ui.button_off(bx, by, bw, label);
+                } else {
+                    ui.button_w(f, bx, by, bw, label);
+                }
                 bx -= pad * 2;
             }
             ui.draw_focus();
@@ -647,12 +999,163 @@ impl ImagePage {
             grid.codes(0, 0, &codes, fg);
         }
         canvas.set_clip_rect(None);
+
+        if self.new_dir.is_some() {
+            self.draw_new_dir(canvas, font, atlas, (width, height), pad, cell, warning);
+        }
+    }
+
+    /// The Create Directory pop-up, in the middle of the window.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_new_dir(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        font: &mut UiFont,
+        atlas: &mut Texture,
+        (width, height): (u32, u32),
+        pad: i32,
+        cell: i32,
+        warning: Color,
+    ) {
+        let t = &THEME;
+        let problem = self.new_dir_problem();
+        let inside = self
+            .tree
+            .get(self.dir)
+            .map_or(Vec::new(), |t| t.label.clone());
+        let Some(p) = &mut self.new_dir else { return };
+        canvas.set_blend_mode(BlendMode::BLEND);
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 60));
+        let _ = canvas.fill_rect(None);
+        canvas.set_blend_mode(BlendMode::NONE);
+
+        let lh = font.line_height();
+        let row_h = lh.max(cell) + pad;
+        let label_w = font.measure("Inside:").max(font.measure("Name:"));
+        let field_w = cell * NAME_MAX as i32 + cell + pad * 2;
+        let w = (pad * 8 + label_w + pad * 3 + field_w).max(font.measure("M") * 26);
+        let title_h = lh + pad * 2;
+        let button_h = lh + pad * 2;
+        let h = title_h + pad * 3 + row_h * 2 + pad * 2 + lh + pad * 3 + button_h + pad * 3;
+        let x0 = (width as i32 - w) / 2;
+        let y0 = (height as i32 - h) / 2;
+        let frame = Rect::new(x0, y0, w as u32, h as u32);
+        canvas.set_draw_color(Color::RGB(0xFF, 0xFF, 0xFF));
+        let _ = canvas.fill_rect(frame);
+        canvas.set_draw_color(t.bar);
+        let _ = canvas.fill_rect(Rect::new(x0, y0, w as u32, title_h as u32));
+        canvas.set_draw_color(t.border);
+        let _ = canvas.draw_line((x0, y0 + title_h), (x0 + w - 1, y0 + title_h));
+        let _ = canvas.draw_rect(frame);
+        font.draw(canvas, x0 + pad * 4, y0 + pad, "Create Directory", t.text);
+
+        let lx = x0 + pad * 4;
+        let fx = lx + label_w + pad * 3;
+        let mut y = y0 + title_h + pad * 3;
+        let mut glyphs = Vec::new();
+        // Inside: GAMES
+        font.draw(canvas, lx, y + (row_h - lh) / 2, "Inside:", t.text);
+        glyphs.push((fx + pad, y + (row_h - cell) / 2, inside, t.text));
+        y += row_h + pad;
+        // Name: [        ]
+        font.draw(canvas, lx, y + (row_h - lh) / 2, "Name:", t.text);
+        let r = Rect::new(fx, y, field_w as u32, row_h as u32);
+        canvas.set_draw_color(t.highlight);
+        let _ = canvas.draw_rect(r);
+        let _ = canvas.draw_rect(Rect::new(
+            r.x() + 1,
+            r.y() + 1,
+            r.width() - 2,
+            r.height() - 2,
+        ));
+        let gx = fx + pad;
+        let gy = y + (row_h - cell) / 2;
+        glyphs.push((gx, gy, p.name.clone(), t.text));
+        let cx = gx + p.cursor as i32 * cell;
+        canvas.set_draw_color(t.text);
+        let _ = canvas.fill_rect(Rect::new(cx, gy, cell as u32, cell as u32));
+        if let Some(&c) = p.name.get(p.cursor) {
+            glyphs.push((cx, gy, vec![c], Color::RGB(0xFF, 0xFF, 0xFF)));
+        }
+        y += row_h + pad * 2;
+        // Why it can't be made.
+        let note = p
+            .error
+            .clone()
+            .or(problem.clone().filter(|s| !s.is_empty()));
+        if let Some(note) = note {
+            font.draw(canvas, lx, y, &note, warning);
+        }
+
+        // [Create] [Cancel]
+        p.hits.clear();
+        let by = y0 + h - pad * 3 - button_h;
+        let bw = font.measure("Create").max(font.measure("Cancel")) + pad * 6;
+        let ok = problem.is_none();
+        let mut bx = x0 + w - pad * 4;
+        for (label, create) in [("Cancel", false), ("Create", true)] {
+            bx -= bw;
+            let r = Rect::new(bx, by, bw as u32, button_h as u32);
+            let (fill, text) = match (create, ok) {
+                (true, true) => (t.highlight, t.highlight_text),
+                (true, false) => (t.bar, t.dim),
+                _ => (t.bar, t.text),
+            };
+            canvas.set_draw_color(fill);
+            let _ = canvas.fill_rect(r);
+            canvas.set_draw_color(if fill == t.highlight { fill } else { t.border });
+            let _ = canvas.draw_rect(r);
+            let lw = font.measure(label);
+            font.draw(
+                canvas,
+                bx + (bw - lw) / 2,
+                by + (button_h - lh) / 2,
+                label,
+                text,
+            );
+            if !create || ok {
+                p.hits.push((r, create));
+            }
+            bx -= pad * 2;
+        }
+
+        for (x, y, codes, fg) in glyphs {
+            let mut grid = Grid {
+                canvas: &mut *canvas,
+                atlas: &mut *atlas,
+                cell: cell as u32,
+                origin_x: x,
+                origin_y: y,
+            };
+            grid.codes(0, 0, &codes, fg);
+        }
     }
 }
 
-impl Default for ImagePage {
-    fn default() -> Self {
-        Self::new()
+/// An editing key in a name box: arrows, Home, End, Backspace, Delete.
+fn edit_name(name: &mut Vec<u8>, cursor: &mut usize, k: sdl2::keyboard::Keycode) {
+    use sdl2::keyboard::Keycode as K;
+    match k {
+        K::LEFT => *cursor = cursor.saturating_sub(1),
+        K::RIGHT => *cursor = (*cursor + 1).min(name.len()),
+        K::HOME => *cursor = 0,
+        K::END => *cursor = name.len(),
+        K::BACKSPACE if *cursor > 0 => {
+            *cursor -= 1;
+            name.remove(*cursor);
+        }
+        K::DELETE if *cursor < name.len() => {
+            name.remove(*cursor);
+        }
+        _ => {}
+    }
+}
+
+/// `NAME.EXT` as its name and extension (without the dot).
+fn split_name(name: &[u8]) -> (&[u8], &[u8]) {
+    match name.iter().rposition(|&c| c == b'.') {
+        Some(d) => (&name[..d], &name[d + 1..]),
+        None => (name, &[]),
     }
 }
 

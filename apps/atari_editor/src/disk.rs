@@ -87,10 +87,11 @@ fn error(e: Error) -> DiskError {
     DiskError::new(kind, e.to_string())
 }
 
-fn timestamp(when: Option<DateTime>) -> DiskResult<Option<Timestamp>> {
-    when.map(|t| Timestamp::new(t.year, t.month, t.day, t.hour, t.minute, t.second))
-        .transpose()
-        .map_err(error)
+/// A date as SpartaDOS keeps it. One it can't hold (before 1980 or after
+/// 2079, from a computer with its clock wrong) is left off rather than
+/// stopping the save.
+fn timestamp(when: Option<DateTime>) -> Option<Timestamp> {
+    when.and_then(|t| Timestamp::new(t.year, t.month, t.day, t.hour, t.minute, t.second).ok())
 }
 
 impl DiskVolume for AtariVolume {
@@ -164,7 +165,7 @@ impl DiskVolume for AtariVolume {
     ) -> DiskResult<()> {
         self.writable()?;
         let path = join(path)?;
-        let when = timestamp(when)?;
+        let when = timestamp(when);
         self.0.set_overwrite(replace);
         let done = self.0.write(path, data, when).map_err(error);
         self.0.set_overwrite(false);
@@ -174,7 +175,7 @@ impl DiskVolume for AtariVolume {
     fn make_dir(&mut self, path: &[Vec<u8>], when: Option<DateTime>) -> DiskResult<()> {
         self.writable()?;
         let path = join(path)?;
-        self.0.make_dir(path, timestamp(when)?).map_err(error)
+        self.0.make_dir(path, timestamp(when)).map_err(error)
     }
 
     fn check_name(&self, name: &[u8]) -> DiskResult<()> {
@@ -250,6 +251,14 @@ mod tests {
             let dated = again.has_dates();
             assert_eq!(list[0].modified, dated.then_some(WHEN), "{layout:?}");
         }
+    }
+
+    #[test]
+    fn dates_sparta_cant_hold_are_left_off() {
+        let mut vol = open(&image(Layout::SpartaSingle, Container::Atr));
+        let wrong = DateTime { year: 1970, ..WHEN };
+        vol.write(&p(&["A"]), b"x", false, Some(wrong)).unwrap();
+        assert_eq!(vol.list(&[]).unwrap()[0].modified, None);
     }
 
     #[test]

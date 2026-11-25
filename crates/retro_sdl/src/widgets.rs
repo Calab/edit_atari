@@ -273,6 +273,26 @@ impl<F: Copy + PartialEq> Ui<'_, '_, '_, F> {
         self.hits.push((r, f, Op::Press));
     }
 
+    /// A greyed-out button at the bottom of a form: drawn, but not
+    /// clickable or focusable.
+    pub fn button_off(&mut self, x: i32, y: i32, w: i32, label: &str) {
+        let t = &THEME;
+        let h = self.lh + self.pad * 2;
+        let r = Rect::new(x, y, w as u32, h as u32);
+        self.canvas.set_draw_color(t.bar);
+        let _ = self.canvas.fill_rect(r);
+        self.canvas.set_draw_color(t.border);
+        let _ = self.canvas.draw_rect(r);
+        let lw = self.font.measure(label);
+        self.font.draw(
+            self.canvas,
+            x + (w - lw) / 2,
+            y + (h - self.lh) / 2,
+            label,
+            t.dim,
+        );
+    }
+
     /// An empty framed box for a field the caller fills in (the Atari
     /// text fields): clicking it focuses `f`.
     pub fn field_box(&mut self, f: F, r: Rect) {

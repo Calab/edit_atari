@@ -103,6 +103,20 @@ impl App {
         );
         self.menus = menus;
 
+        // The disk image page, under any dialog it leads to (Replace?).
+        if let Some(mut p) = self.image_page.take() {
+            let cell = 8 * (2.0 * self.ratio).round().max(1.0) as i32;
+            p.draw(
+                canvas,
+                small,
+                atlas,
+                (f.width, f.height),
+                self.prefs_pad,
+                cell,
+                crate::render::rgb(self.spec.palette.warning),
+            );
+            self.image_page = Some(p);
+        }
         if let Some(d) = &mut self.dialog {
             d.draw(canvas, font, (f.width, f.height), self.pad);
         }
@@ -127,19 +141,6 @@ impl App {
                 cell,
             );
             self.fonts = Some(p);
-        }
-        if let Some(mut p) = self.image_page.take() {
-            let cell = 8 * (2.0 * self.ratio).round().max(1.0) as i32;
-            p.draw(
-                canvas,
-                small,
-                atlas,
-                (f.width, f.height),
-                self.prefs_pad,
-                cell,
-                crate::render::rgb(self.spec.palette.warning),
-            );
-            self.image_page = Some(p);
         }
         if let Some(mut p) = self.print.take() {
             p.draw(

@@ -9,6 +9,7 @@ mod dialog;
 mod find_page;
 mod fonts_page;
 mod image_page;
+mod local_time;
 pub mod menu;
 mod prefs;
 mod print_page;
@@ -381,8 +382,13 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // File > Open from Image ("1", or an image to show), then keys on its
     // page ("down,return").
     if let Some(v) = std::env::var_os("RETRO_EDITOR_IMAGE_PAGE") {
-        app.test_open_image_page((v != "1").then(|| v.into()));
+        app.test_open_image_page(false, (v != "1").then(|| v.into()));
     }
+    // The same for File > Save to Image.
+    if let Some(v) = std::env::var_os("RETRO_EDITOR_SAVE_IMAGE_PAGE") {
+        app.test_open_image_page(true, (v != "1").then(|| v.into()));
+    }
+    // Keys on the page ("down,return"); "type:TEXT" types TEXT.
     if let Ok(keys) = std::env::var("RETRO_EDITOR_IMAGE_KEYS") {
         app.test_image_keys(&keys);
     }
