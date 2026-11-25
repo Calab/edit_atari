@@ -2,15 +2,66 @@
 //! to Image, using the atari-disk crate: Atari DOS 2, MyDOS and
 //! SpartaDOS.
 
-use atari_disk::{DiskImage, Error, FileSystem, Timestamp, Volume};
+use atari_disk::{Container, DiskImage, Error, FileSystem, Layout, Timestamp, Volume};
 use retro_core::disk::{
-    DateTime, DiskEntry, DiskError, DiskErrorKind, DiskImages, DiskResult, DiskVolume,
+    DateTime, DiskEntry, DiskError, DiskErrorKind, DiskImages, DiskResult, DiskSize, DiskVolume,
+    NewDisk,
 };
 
 /// Atari DOS's separator between directories in a path.
 const SEPARATOR: u8 = b'>';
 
 pub struct AtariDisks;
+
+/// New Image's file systems and image types, by index.
+const DOS2: usize = 0;
+const MYDOS: usize = 1;
+const SPARTA: usize = 2;
+const ATR: usize = 0;
+
+/// Atari DOS 2's disks: 2.0S, 2.5 and 2.0D.
+const DOS2_SIZES: &[DiskSize] = &[
+    DiskSize {
+        label: "2.0S single 90K",
+        sector_size: Some(128),
+    },
+    DiskSize {
+        label: "2.5 enhanced 130K",
+        sector_size: Some(128),
+    },
+    DiskSize {
+        label: "2.0D double 180K",
+        sector_size: Some(256),
+    },
+];
+
+/// MyDOS's and SpartaDOS's disks.
+const BIG_SIZES: &[DiskSize] = &[
+    DiskSize {
+        label: "Single 90K",
+        sector_size: Some(128),
+    },
+    DiskSize {
+        label: "Enhanced 130K",
+        sector_size: Some(128),
+    },
+    DiskSize {
+        label: "Double 180K",
+        sector_size: Some(256),
+    },
+    DiskSize {
+        label: "Double-sided 360K",
+        sector_size: Some(256),
+    },
+    DiskSize {
+        label: "Double-sided 720K",
+        sector_size: Some(256),
+    },
+    DiskSize {
+        label: "Custom",
+        sector_size: None,
+    },
+];
 
 impl DiskImages for AtariDisks {
     fn name(&self) -> &'static str {
@@ -23,6 +74,72 @@ impl DiskImages for AtariDisks {
 
     fn top_directory(&self) -> &'static [u8] {
         &[SEPARATOR]
+    }
+
+    fn new_systems(&self) -> &'static [&'static str] {
+        &["Atari DOS 2", "MyDOS", "SpartaDOS"]
+    }
+
+    fn new_sizes(&self, system: usize) -> &'static [DiskSize] {
+        match system {
+            DOS2 => DOS2_SIZES,
+            _ => BIG_SIZES,
+        }
+    }
+
+    fn custom_sector_sizes(&self, system: usize) -> &'static [usize] {
+        match system {
+            MYDOS => &[128, 256],
+            SPARTA => &[128, 256, 512],
+            _ => &[],
+        }
+    }
+
+    fn has_volume_name(&self, system: usize) -> bool {
+        system == SPARTA
+    }
+
+    fn container_holds(&self, container: usize, sector_size: usize) -> bool {
+        // XFD has no header, so only 128-byte sectors.
+        container == ATR || sector_size == 128
+    }
+
+    fn format(&self, new: &NewDisk) -> DiskResult<Box<dyn DiskVolume>> {
+        let custom = (new.sectors, new.sector_size);
+        let layout = match (new.system, new.size) {
+            (DOS2, 0) => Layout::Dos2Single,
+            (DOS2, 1) => Layout::Dos25Enhanced,
+            (DOS2, 2) => Layout::Dos2Double,
+            (MYDOS, 0) => Layout::MyDosSingle,
+            (MYDOS, 1) => Layout::MyDosEnhanced,
+            (MYDOS, 2) => Layout::MyDosDouble,
+            (MYDOS, 3) => Layout::MyDosDoubleSided,
+            (MYDOS, 4) => Layout::MyDosDoubleSided80,
+            (MYDOS, _) => Layout::MyDosCustom {
+                sectors: custom.0,
+                sector_size: custom.1,
+            },
+            (SPARTA, 0) => Layout::SpartaSingle,
+            (SPARTA, 1) => Layout::SpartaEnhanced,
+            (SPARTA, 2) => Layout::SpartaDouble,
+            (SPARTA, 3) => Layout::SpartaDoubleSided,
+            (SPARTA, 4) => Layout::SpartaDoubleSided80,
+            (SPARTA, _) => Layout::SpartaCustom {
+                sectors: custom.0,
+                sector_size: custom.1,
+            },
+            _ => return Err(DiskError::other("no such disk")),
+        };
+        let container = if new.container == ATR {
+            Container::Atr
+        } else {
+            Container::Xfd
+        };
+        let mut vol = Volume::format(layout, container).map_err(error)?;
+        if new.system == SPARTA && !new.volume_name.is_empty() {
+            vol.set_volume_name(&new.volume_name).map_err(error)?;
+        }
+        Ok(Box::new(AtariVolume(vol)))
     }
 
     fn open(&self, bytes: &[u8]) -> DiskResult<Box<dyn DiskVolume>> {
@@ -259,6 +376,48 @@ mod tests {
         let wrong = DateTime { year: 1970, ..WHEN };
         vol.write(&p(&["A"]), b"x", false, Some(wrong)).unwrap();
         assert_eq!(vol.list(&[]).unwrap()[0].modified, None);
+    }
+
+    #[test]
+    fn new_images() {
+        let d = AtariDisks;
+        let new = |system, size| NewDisk {
+            system,
+            size,
+            sectors: 0,
+            sector_size: 0,
+            container: ATR,
+            volume_name: Vec::new(),
+        };
+        // Every size of every system formats, and opens again.
+        for system in 0..d.new_systems().len() {
+            for (size, s) in d.new_sizes(system).iter().enumerate() {
+                let mut n = new(system, size);
+                if s.sector_size.is_none() {
+                    n.sectors = 4000;
+                    n.sector_size = 256;
+                }
+                let vol = d.format(&n).unwrap();
+                let again = d.open(&vol.to_bytes()).unwrap();
+                assert!(again.list(&[]).unwrap().is_empty(), "{system} {size}");
+            }
+        }
+        let vol = d.format(&new(DOS2, 1)).unwrap();
+        assert!(vol.info().starts_with("Atari DOS 2.5, 1040 sectors"));
+        // A volume name, on SpartaDOS.
+        let mut n = new(SPARTA, 2);
+        n.volume_name = b"GAMES".to_vec();
+        assert!(d.format(&n).unwrap().info().contains("volume GAMES"));
+        // XFD: 128-byte sectors only.
+        let mut n = new(DOS2, 0);
+        n.container = 1;
+        assert!(d.format(&n).is_ok());
+        assert!(!d.container_holds(1, 256));
+        // A custom size out of range says why.
+        let mut n = new(MYDOS, 5);
+        n.sectors = 100;
+        n.sector_size = 128;
+        assert!(d.format(&n).is_err());
     }
 
     #[test]

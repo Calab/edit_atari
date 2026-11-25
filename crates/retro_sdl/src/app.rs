@@ -83,6 +83,8 @@ enum FileJobKind {
     Font(usize),
     /// Choose a disk image (Open from Image).
     ChooseImage,
+    /// Where to save a new, blank disk image.
+    NewImage,
 }
 
 /// The forms File > Export writes.
@@ -111,6 +113,7 @@ use crate::fonts_page::{self, FontsPage};
 use crate::image_page::{self, ImagePage};
 use crate::local_time;
 use crate::menu::{self, Command, Geometry, ItemState, Menu, MenuState};
+use crate::new_image::NewImagePopup;
 use crate::prefs::{self, Field, Op, Prefs};
 use crate::print_page::{self, PrintPage};
 use crate::source::Source;
@@ -206,6 +209,9 @@ pub struct App {
     pub fonts: Option<FontsPage>,
     /// The Open from Image page, when open.
     pub image_page: Option<ImagePage>,
+    /// A new, blank image waiting for the Save dialog to say where it
+    /// goes.
+    new_image_bytes: Option<Vec<u8>>,
     pub menus: Vec<Menu>,
     pub context_menu: Menu,
     pub menu: MenuState,
@@ -298,6 +304,7 @@ impl App {
             print: None,
             fonts: None,
             image_page: None,
+            new_image_bytes: None,
             menus,
             context_menu: menu::context_menu(),
             menu: MenuState::default(),
@@ -778,6 +785,7 @@ impl App {
             }
             FileJobKind::Open => self.file_dialog("Open", false),
             FileJobKind::ChooseImage => self.image_dialog(),
+            FileJobKind::NewImage => self.new_image_dialog(),
             FileJobKind::Font(i) => {
                 let mut d = rfd::FileDialog::new()
                     .set_title("Font")
@@ -831,7 +839,8 @@ impl App {
                 FileJobKind::SaveAs { .. }
                 | FileJobKind::SaveListingAs
                 | FileJobKind::Export { .. }
-                | FileJobKind::SavePdf => d.save_file(),
+                | FileJobKind::SavePdf
+                | FileJobKind::NewImage => d.save_file(),
                 FileJobKind::Open
                 | FileJobKind::Import
                 | FileJobKind::Font(_)
@@ -873,6 +882,9 @@ impl App {
                 self.note_folder(&path);
                 self.load_image_page(path);
             }
+            (FileJobKind::NewImage, Some(path)) => self.write_new_image(path),
+            // Not saved: the New Image pop-up stays, to try again.
+            (FileJobKind::NewImage, None) => self.new_image_bytes = None,
             // Nothing chosen, and no image to show: there's no page.
             (FileJobKind::ChooseImage, None) => {
                 if self.image_page.as_ref().is_some_and(|p| p.image.is_none()) {
@@ -1928,7 +1940,7 @@ impl App {
     /// document's own, else the latest in the recent files), or ask for
     /// one.
     fn open_image_page(&mut self, mode: image_page::Mode) {
-        let mut page = ImagePage::new(mode);
+        let mut page = self.new_image_page(mode);
         if mode == image_page::Mode::Save {
             page.set_name(&self.image_name());
         }
@@ -2024,6 +2036,12 @@ impl App {
             A::Close => self.image_page = None,
             A::Choose => self.start_file_job(FileJobKind::ChooseImage),
             A::MakeDir => self.make_image_dir(),
+            A::OpenNewImage => {
+                if let (Some(p), Some(disks)) = (&mut self.image_page, &self.spec.disks) {
+                    p.new_image = Some(NewImagePopup::new(disks.as_ref()));
+                }
+            }
+            A::CreateImage => self.create_image(),
             A::Save => {
                 let Some(p) = &self.image_page else { return };
                 let Some(image) = p.image.clone() else { return };
@@ -2049,6 +2067,108 @@ impl App {
                 self.image_page = None;
                 self.note_folder(source.host());
                 self.open_source(source);
+            }
+        }
+    }
+
+    /// An empty image page; New Image works if the machine can format.
+    fn new_image_page(&self, mode: image_page::Mode) -> ImagePage {
+        let mut page = ImagePage::new(mode);
+        page.can_new_image = self
+            .spec
+            .disks
+            .as_ref()
+            .is_some_and(|d| !d.new_systems().is_empty());
+        page
+    }
+
+    /// New Image's Create...: format the disk in memory (saying in the
+    /// pop-up why it can't be), then ask where to save it.
+    fn create_image(&mut self) {
+        let (Some(disks), Some(pop)) = (
+            &self.spec.disks,
+            self.image_page.as_mut().and_then(|p| p.new_image.as_mut()),
+        ) else {
+            return;
+        };
+        let made = pop
+            .request()
+            .and_then(|req| disks.format(&req).map_err(|e| sentence(&e.message)));
+        match made {
+            Ok(vol) => {
+                self.new_image_bytes = Some(vol.to_bytes());
+                self.start_file_job(FileJobKind::NewImage);
+            }
+            Err(e) => pop.error = Some(e),
+        }
+    }
+
+    /// The OS Save dialog for a new image.
+    fn new_image_dialog(&self) -> rfd::FileDialog {
+        let pop = self.image_page.as_ref().and_then(|p| p.new_image.as_ref());
+        let name = pop.map_or("NEWDISK.ATR".into(), |p| p.file_name());
+        let mut d = rfd::FileDialog::new()
+            .set_title("New Image")
+            .set_file_name(name);
+        if let Some(ext) = pop.map(|p| p.extension()) {
+            d = d.add_filter(
+                format!(".{ext} images"),
+                &[ext.to_ascii_uppercase(), ext.to_ascii_lowercase()],
+            );
+        }
+        match self
+            .image_page
+            .as_ref()
+            .and_then(|p| p.image.as_ref())
+            .and_then(|i| i.parent())
+            .filter(|d| d.is_dir())
+        {
+            Some(dir) => d.set_directory(dir),
+            None => self.in_start_dir(d, true),
+        }
+    }
+
+    /// The Save dialog chose `path` for the new image: write it, and show
+    /// it on the page.
+    fn write_new_image(&mut self, mut path: PathBuf) {
+        let Some(bytes) = self.new_image_bytes.take() else {
+            return;
+        };
+        let ext = self
+            .image_page
+            .as_ref()
+            .and_then(|p| p.new_image.as_ref())
+            .map(|p| p.extension());
+        if path.extension().is_none()
+            && let Some(ext) = ext
+        {
+            path.set_extension(ext);
+        }
+        if let Err(e) = write_atomically(&path, &bytes) {
+            if let Some(pop) = self.image_page.as_mut().and_then(|p| p.new_image.as_mut()) {
+                pop.error = Some(format!("Can't save it: {e}"));
+            }
+            return;
+        }
+        self.note_folder(&path);
+        if let Some(p) = &mut self.image_page {
+            p.new_image = None;
+        }
+        self.load_image_page(path);
+    }
+
+    /// Test hook: on the Save to Image page, open New Image and press
+    /// `keys` in it ("tab,right,type:GAMES"), then Create into `path`
+    /// (without the Save dialog).
+    pub fn test_new_image(&mut self, keys: &str, path: Option<PathBuf>) {
+        self.image_action(image_page::Action::OpenNewImage);
+        self.test_image_keys(keys);
+        if let Some(path) = path {
+            self.create_image();
+            if self.new_image_bytes.is_some() {
+                self.file_job = None;
+                self.message = None;
+                self.write_new_image(path);
             }
         }
     }
@@ -2116,7 +2236,7 @@ impl App {
         };
         match image {
             Some(image) => {
-                let mut page = ImagePage::new(mode);
+                let mut page = self.new_image_page(mode);
                 if save {
                     page.set_name(&self.image_name());
                 }

@@ -98,6 +98,32 @@ impl std::error::Error for DiskError {}
 
 pub type DiskResult<T> = Result<T, DiskError>;
 
+/// A size of blank disk New Image can make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskSize {
+    /// e.g. "Single 90K".
+    pub label: &'static str,
+    /// Bytes per sector; `None` for a custom size, where the user gives
+    /// the sectors and their size.
+    pub sector_size: Option<usize>,
+}
+
+/// What New Image is asked to make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDisk {
+    /// Index into [`DiskImages::new_systems`].
+    pub system: usize,
+    /// Index into [`DiskImages::new_sizes`] for that system.
+    pub size: usize,
+    /// For a custom size: how many sectors, and their size.
+    pub sectors: u32,
+    pub sector_size: usize,
+    /// Index into [`DiskImages::extensions`]: the kind of image file.
+    pub container: usize,
+    /// The volume name, on systems that have one (empty: none).
+    pub volume_name: Vec<u8>,
+}
+
 /// The kinds of disk image a machine reads: one for the whole program.
 pub trait DiskImages {
     /// What to call them in the file dialog, e.g. "Atari disk images".
@@ -116,6 +142,38 @@ pub trait DiskImages {
     /// Open an image file's bytes. Fails if they aren't an image, or the
     /// disk has no file system the machine knows.
     fn open(&self, bytes: &[u8]) -> DiskResult<Box<dyn DiskVolume>>;
+
+    /// The file systems New Image can format (none: no New Image).
+    fn new_systems(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The disk sizes for file system `system`.
+    fn new_sizes(&self, _system: usize) -> &'static [DiskSize] {
+        &[]
+    }
+
+    /// The sector sizes a custom-size disk of `system` may have.
+    fn custom_sector_sizes(&self, _system: usize) -> &'static [usize] {
+        &[]
+    }
+
+    /// Whether disks of `system` have a volume name.
+    fn has_volume_name(&self, _system: usize) -> bool {
+        false
+    }
+
+    /// Whether image type `container` (an index into
+    /// [`DiskImages::extensions`]) can hold sectors of `sector_size`.
+    fn container_holds(&self, _container: usize, _sector_size: usize) -> bool {
+        true
+    }
+
+    /// A blank, formatted disk as asked. Fails, saying why, for a size or
+    /// name the system can't have.
+    fn format(&self, _new: &NewDisk) -> DiskResult<Box<dyn DiskVolume>> {
+        Err(DiskError::other("new images can't be made"))
+    }
 }
 
 /// One open disk image, held in memory.

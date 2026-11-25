@@ -16,6 +16,7 @@ use sdl2::render::{BlendMode, Canvas, Texture};
 use sdl2::video::Window;
 
 use crate::menu::THEME;
+use crate::new_image::{self, NewImagePopup};
 use crate::render::Grid;
 use crate::ui_font::UiFont;
 use crate::widgets::{Op, Ui};
@@ -36,6 +37,7 @@ pub enum Field {
     Name,
     Choose,
     NewDir,
+    NewImage,
     /// Open, or Save.
     Go,
     Cancel,
@@ -76,6 +78,10 @@ pub enum Action {
     /// Make the directory named in the Create Directory pop-up, inside
     /// the directory shown.
     MakeDir,
+    /// Open the New Image pop-up (the app knows the choices).
+    OpenNewImage,
+    /// Make the image chosen in the New Image pop-up.
+    CreateImage,
     Close,
 }
 
@@ -103,6 +109,10 @@ pub struct ImagePage {
     has_directories: bool,
     /// The Create Directory pop-up, while it's open.
     pub new_dir: Option<NewDirPopup>,
+    /// The New Image pop-up, while it's open.
+    pub new_image: Option<NewImagePopup>,
+    /// The machine can make new images (New Image isn't greyed out).
+    pub can_new_image: bool,
     pub tree: Vec<TreeRow>,
     pub has_dates: bool,
     /// The directory shown (an index into `tree`).
@@ -143,6 +153,8 @@ impl ImagePage {
             write_protected: false,
             has_directories: false,
             new_dir: None,
+            new_image: None,
+            can_new_image: false,
             tree: Vec::new(),
             has_dates: false,
             dir: 0,
@@ -320,6 +332,10 @@ impl ImagePage {
     /// Text typed while the page is open, in machine codes: into the
     /// File name box if it has the focus.
     pub fn type_codes(&mut self, codes: &[u8]) {
+        if let Some(p) = &mut self.new_image {
+            p.type_codes(codes);
+            return;
+        }
         let codes: Vec<u8> = codes.iter().filter_map(|&c| self.name_char(c)).collect();
         let (name, cursor) = match &mut self.new_dir {
             Some(p) => (&mut p.name, &mut p.cursor),
@@ -337,7 +353,7 @@ impl ImagePage {
 
     /// Whether typed text is wanted (a name box has the focus).
     pub fn wants_text(&self) -> bool {
-        self.new_dir.is_some() || self.focus == Field::Name
+        self.new_image.is_some() || self.new_dir.is_some() || self.focus == Field::Name
     }
 
     /// Why the name in the box can't be saved as, if it can't: `Some("")`
@@ -423,6 +439,9 @@ impl ImagePage {
                 if self.can_make_dir() {
                     v.push(Field::NewDir);
                 }
+                if self.can_new_image {
+                    v.push(Field::NewImage);
+                }
                 if self.can_save() {
                     v.push(Field::Go);
                 }
@@ -504,7 +523,17 @@ impl ImagePage {
     /// A key while the page is open; every key is used up.
     pub fn key(&mut self, k: sdl2::keyboard::Keycode, shift: bool) -> Action {
         use sdl2::keyboard::Keycode as K;
-        // The pop-up takes every key while it's open.
+        // A pop-up takes every key while it's open.
+        if let Some(p) = &mut self.new_image {
+            return match p.key(k, shift) {
+                new_image::Action::Create => Action::CreateImage,
+                new_image::Action::Cancel => {
+                    self.new_image = None;
+                    Action::None
+                }
+                new_image::Action::None => Action::None,
+            };
+        }
         if self.new_dir.is_some() {
             let ok = self.new_dir_problem().is_none();
             let p = self.new_dir.as_mut().unwrap();
@@ -528,6 +557,7 @@ impl ImagePage {
         match self.focus {
             Field::Choose if press => return Action::Choose,
             Field::NewDir if press => self.open_new_dir(),
+            Field::NewImage if press => return Action::OpenNewImage,
             Field::Go if press => return self.go(),
             Field::Cancel if press => return Action::Close,
             Field::Name if enter => return self.save(),
@@ -590,7 +620,17 @@ impl ImagePage {
 
     /// A left click; `double` for a double click.
     pub fn click(&mut self, x: i32, y: i32, double: bool) -> Action {
-        // The pop-up: only its buttons work while it's open.
+        // A pop-up: only it works while it's open.
+        if let Some(p) = &mut self.new_image {
+            return match p.click(x, y) {
+                new_image::Action::Create => Action::CreateImage,
+                new_image::Action::Cancel => {
+                    self.new_image = None;
+                    Action::None
+                }
+                new_image::Action::None => Action::None,
+            };
+        }
         if let Some(p) = &self.new_dir {
             match p.hits.iter().find(|(r, _)| r.contains_point((x, y))) {
                 Some(&(_, true)) => return Action::MakeDir,
@@ -626,6 +666,7 @@ impl ImagePage {
                     self.open_new_dir();
                     Action::None
                 }
+                Field::NewImage => Action::OpenNewImage,
                 Field::Go => self.go(),
                 Field::Cancel => Action::Close,
                 _ => Action::None,
@@ -637,7 +678,7 @@ impl ImagePage {
     /// The mouse wheel: scroll the list under the pointer (`dy` notches,
     /// up positive).
     pub fn wheel(&mut self, x: i32, y: i32, dy: i32) {
-        if self.new_dir.is_some() {
+        if self.new_dir.is_some() || self.new_image.is_some() {
             return;
         }
         // Over the directories: those. Anywhere else: the files.
@@ -968,7 +1009,11 @@ impl ImagePage {
                     ui.button_off(lx, by, bw, NEW_DIR);
                 }
                 let iw = button(ui.font, NEW_IMAGE);
-                ui.button_off(lx + bw + pad * 2, by, iw, NEW_IMAGE);
+                if self.can_new_image {
+                    ui.button_w(Field::NewImage, lx + bw + pad * 2, by, iw, NEW_IMAGE);
+                } else {
+                    ui.button_off(lx + bw + pad * 2, by, iw, NEW_IMAGE);
+                }
             }
             let mut bx = rx;
             for (f, label) in [(Field::Cancel, CANCEL), (Field::Go, go_label)] {
@@ -1002,6 +1047,9 @@ impl ImagePage {
 
         if self.new_dir.is_some() {
             self.draw_new_dir(canvas, font, atlas, (width, height), pad, cell, warning);
+        }
+        if let Some(p) = &mut self.new_image {
+            p.draw(canvas, font, atlas, (width, height), pad, cell, warning);
         }
     }
 

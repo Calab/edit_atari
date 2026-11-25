@@ -11,6 +11,7 @@ mod fonts_page;
 mod image_page;
 mod local_time;
 pub mod menu;
+mod new_image;
 mod prefs;
 mod print_page;
 pub mod render;
@@ -391,6 +392,12 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // Keys on the page ("down,return"); "type:TEXT" types TEXT.
     if let Ok(keys) = std::env::var("RETRO_EDITOR_IMAGE_KEYS") {
         app.test_image_keys(&keys);
+    }
+    // New Image on the Save to Image page, keys in its pop-up, and
+    // (if given) the file to create without the Save dialog.
+    if let Ok(keys) = std::env::var("RETRO_EDITOR_NEW_IMAGE") {
+        let path = std::env::var_os("RETRO_EDITOR_NEW_IMAGE_TO").map(Into::into);
+        app.test_new_image(&keys, path);
     }
     // Type this text, then File > Save (as Ctrl+S does).
     if let Ok(text) = std::env::var("RETRO_EDITOR_TYPE_AND_SAVE") {
