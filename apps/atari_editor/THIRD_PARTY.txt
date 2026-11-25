@@ -3,6 +3,7 @@ SDL2 (the C library, built in by the sdl2 crate) - Zlib
 
 Rust libraries:
   allocator-api2 0.2.21 - MIT OR Apache-2.0
+  atari-disk 0.1.0 (https://github.com/Calab/atari-disk#483d13da) - MIT OR Apache-2.0
   bitflags 2.13.2 - MIT OR Apache-2.0
   block2 0.6.2 - MIT
   bumpalo 3.20.4 - MIT OR Apache-2.0

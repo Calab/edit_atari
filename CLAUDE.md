@@ -2,7 +2,7 @@
 
 Most project knowledge (Steve's preferences, decisions, release steps)
 is in Claude's memory for this project. This file covers the disk-image
-crate the File > Image Manager will be built on.
+crate behind File > Open from Image and Save to Image.
 
 ## The atari-disk crate
 `atari-disk` (`use atari_disk::...`) is Steve's own crate for Atari disk
@@ -18,11 +18,14 @@ would break this repository's GitHub builds). `Cargo.lock` pins one
 commit: after Steve pushes a change to atari-disk, run
 `cargo update -p atari-disk` here to pick it up.
 
-**Where the Image Manager goes is still open:** the other pages
-(Fonts, Print, Find) are in `crates/retro_sdl`, which is shared with
-the planned Commodore editor, so Atari-only disk code probably belongs
-in `apps/atari_editor` or `crates/atari`, behind something retro_sdl
-can call. Decide with Steve.
+**Where the code is:** `retro_core::disk` is the machine-neutral
+interface (`DiskImages`, `DiskVolume`). The Atari version, the only
+code that uses atari-disk, is `apps/atari_editor/src/disk.rs`. The
+pages are in `crates/retro_sdl`: `image_page.rs` (Open from Image and
+Save to Image, with the Create Directory pop-up), `new_image.rs` (the
+New Image pop-up), `source.rs` (a document's file, or file in an
+image) and `local_time.rs` (dates for SpartaDOS, from the OS, no
+crate).
 
 ### What it does
 - Images: `.ATR` and `.XFD`, 128/256/512-byte sectors, ATR write-protect

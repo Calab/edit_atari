@@ -64,6 +64,9 @@ character set is built in.
 - Opens and saves tokenized programs from nine Atari languages (seven
   BASICs, Microsoft BASIC II and MAC/65), exactly as each language saves
   them (see [File types](#file-types)).
+- Opens and saves files inside Atari disk images (`.ATR` and `.XFD`) on
+  Atari DOS 2, MyDOS and SpartaDOS disks, directories included, and makes
+  new blank images (see [Disk images](#disk-images)).
 
 - File, Edit, Options and Help menus, with the usual shortcuts (Ctrl+N, O,
   S, P, Z, Y, X, C, V, A; on a Mac ⌘N, ⌘O, ⌘S and so on, with ⇧⌘Z for
@@ -74,7 +77,8 @@ character set is built in.
 - Drop a file on the window to open it. Drop several and the first opens
   in that window, each of the others in a new window of its own. On a Mac,
   Finder's *Open With* offers Edit Atari for any file.
-- The File menu lists the last six files opened or saved.
+- File > Recent Files lists the last six files opened or saved, files in
+  disk images included (`MYDISK.ATR > SAMPLE.LST`).
 - If another program (an emulator saving through its H: device, say)
   changes the open file, the editor notices when you come back to it: it
   reloads the file, or asks first if you have unsaved changes, and asks
@@ -210,6 +214,77 @@ dialect is recognized from the file itself.
   always a line end and a PC line feed is a CTRL-J character. If a file
   looks like PC text, the status bar suggests File > Import.
 
+## Disk images
+
+The editor reads and writes the files inside Atari disk images, so a
+program can go straight from the editor to an emulator or a real Atari
+(through an SIO2PC or SD card device) and back. It reads `.ATR` images
+(128, 256 and 512-byte sectors) and `.XFD` images (128-byte sectors),
+with these file systems:
+
+- Atari DOS 2: 2.0S, 2.0D, and DOS 2.5 enhanced density
+- MyDOS 4.x, with subdirectories
+- SpartaDOS 2.x and 3.x, and SpartaDOS X, with subdirectories, dates and
+  volume names
+
+A disk with any other DOS (or none, like most game disks) can't be opened.
+
+- **Opening**: File > Open from Image opens the image last used (or asks
+  for one) and shows its directories on the left, starting with `>` for
+  the top directory as SpartaDOS writes it, and the chosen directory's
+  files on the right, listed as DIR lists them: name and extension, size,
+  the date on SpartaDOS, and `*` for a locked file. Names are shown in the
+  Atari character set, so even an odd name written by another program shows
+  exactly. Choose Image... picks another image. Double-click a file, or
+  select it and press Enter or Open; Enter or a double-click on a directory
+  goes into it, and Backspace goes back up. The arrows at the side of each
+  list show that it runs on above or below, and scroll it.
+- **The image stays the document's home**: the title bar and status bar
+  show where it came from (`MYDISK.ATR > SAMPLE.LST`), Save (Ctrl+S)
+  writes it back into the image, and Recent Files lists it the same way.
+- **Saving**: File > Save to Image shows the same page with a File name
+  box, which starts with the document's name. Names are typed to suit the
+  disk's DOS: lower case becomes capitals, characters the DOS can't use
+  (`_` on DOS 2, say) are left out, and if the name still breaks a rule
+  (up to 8 characters, a dot and up to 3 more; DOS 2 names start with a
+  letter) the reason is shown and Save waits. Clicking a file in the list
+  takes its name. The format comes from the extension, as with Save As.
+  Saving over a file that's there asks first; a locked file is refused.
+  On SpartaDOS, files are dated with the computer's clock.
+- **Create Directory** (on the Save to Image page, for MyDOS and SpartaDOS
+  disks) makes a directory inside the one shown, and goes into it.
+- **New Image** (on the Save to Image page) makes a blank, formatted data
+  disk and asks where to save it:
+  - Atari DOS 2: 2.0S single density (90K), 2.5 enhanced density (130K)
+    or 2.0D double density (180K)
+  - MyDOS or SpartaDOS: single (90K), enhanced (130K) or double density
+    (180K), double-sided (360K or 720K), or a custom size (up to 65535
+    sectors of 128 or 256 bytes, or 512 bytes for SpartaDOS X), for hard
+    disk partitions
+  - `.ATR`, or `.XFD` for disks with 128-byte sectors
+  - a volume name on SpartaDOS
+
+  The new disks have no DOS on them, so they can't be booted: use them
+  as data disks, or write DOS to them with the DOS's own menu in an
+  emulator.
+- **Safety**: every change reads the image file again, makes the change,
+  and writes the whole image back (to a temporary file that then replaces
+  it), so a failed save leaves the image as it was. Images marked
+  write-protected (the ATR flag) are never changed. The editor doesn't
+  delete, rename, copy or lock files on a disk; use the DOS for that.
+
+**Don't change an image that's open in another program.** An emulator
+with the image mounted (in Altirra, say) keeps its own copy of the disk
+and can write it back over the editor's changes, or the editor over the
+emulator's. Unmount the image, or mount it read-only, while saving to it
+from the editor. If another program changes the file you're editing in an
+image, the editor notices, as it does for ordinary files, and asks before
+a save would replace that program's version.
+
+The disk images are read and written by
+[atari-disk](https://github.com/Calab/atari-disk), a library of its own
+that other programs can use too.
+
 ## Installing
 
 Download the package for your computer from the
@@ -283,17 +358,17 @@ choose a file" in the Run and Debug view.
 
 | Path                | Contents                                                                                  |
 |---------------------|-------------------------------------------------------------------------------------------|
-| `crates/retro_core` | Machine-independent editor: document, layout, keyboard interface                          |
+| `crates/retro_core` | Machine-independent editor: document, layout, keyboard and disk image interfaces          |
 | `crates/retro_sdl`  | SDL2 window, drawing, sound and settings, shared by all machines                          |
 | `crates/atari`      | Atari specifics: ATASCII, character set, keyboard rules, key click                        |
-| `apps/atari_editor` | The Atari editor program                                                                  |
+| `apps/atari_editor` | The Atari editor program, and its disk images (through the atari-disk library)            |
 | `tools/fontgen`     | Converts the pixel TrueType font into the built-in 8x8 character set, and makes the icons |
 | `assets/`           | Fonts and program icons                                                                   |
 | `packaging/`        | Release extras: Linux menu entry and installer, macOS app details                         |
 | `docs/`             | Design notes and tokenized-language references                                            |
 
-The machine-specific parts sit behind the `Machine` and `KeyboardRules`
-traits, so an editor for another 8-bit computer (e.g. a Commodore 64 PETSCII
+The machine-specific parts sit behind the `Machine`, `KeyboardRules` and
+`DiskImages` traits, so an editor for another 8-bit computer (e.g. a Commodore 64 PETSCII
 editor) can reuse `retro_core` and `retro_sdl`.
 
 ### Regenerating the character set
