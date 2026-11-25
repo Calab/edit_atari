@@ -16,7 +16,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "atari"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "retro_core",
 ]
@@ -28,7 +28,7 @@ source = "git+https://github.com/Calab/atari-disk#483d13daa20aed4cab66146f32564c
 
 [[package]]
 name = "atari_editor"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "atari",
  "atari-disk",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "fontgen"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "png",
  "ttf-parser",
@@ -386,11 +386,11 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "retro_core"
-version = "1.3.1"
+version = "1.4.0"
 
 [[package]]
 name = "retro_sdl"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "fontdue",
  "retro_core",
