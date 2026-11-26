@@ -155,7 +155,8 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
     // Start with the machine's screen plus a border and room for the menu
     // and status bars, lowering the zoom if that doesn't fit the display,
     // and make it big enough for the Preferences page too. It can't be made
-    // smaller than the screen at 2x zoom.
+    // smaller than the screen at 2x zoom (with four extra rows, so the
+    // About box fits).
     {
         let to_window = |n: u32| (n as f32 / app.ratio).ceil() as u32;
         // Line numbers make the 40-column screen that much wider.
@@ -183,7 +184,7 @@ pub fn run(spec: AppSpec, file: Option<PathBuf>) -> Result<(), String> {
         let bars = app.bar_height as u32 * 2;
         let (min_w, min_h) = fit(
             to_window(native_cols * 16 + numbers(on, 16)),
-            to_window(24 * 16 + bars),
+            to_window(28 * 16 + bars),
         );
         let _ = canvas.window_mut().set_minimum_size(min_w, min_h);
 
