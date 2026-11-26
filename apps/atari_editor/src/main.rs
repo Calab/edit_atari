@@ -197,6 +197,11 @@ fn about() -> String {
          Licensed under the GNU GPL, version 3 or later.\n\
          See Help > Licensing for details.\n\
          \n\
+         WARNING: Use at your own risk. There is no warranty.\n\
+         You are responsible for your own files: keep backups.\n\
+         The authors are not responsible for lost or damaged\n\
+         files, disk images or data.\n\
+         \n\
          Source code:\n\
          {}",
         env!("CARGO_PKG_VERSION"),

@@ -8,6 +8,12 @@ from nine Atari languages, all in the real Atari character set.
 The program is a single file with nothing else to install: the Atari
 character set is built in.
 
+> [!WARNING]
+> **Use at your own risk. There is no warranty.** You are responsible for
+> your own files: **keep backups**. The authors are **not responsible for
+> lost or damaged files, disk images or data** (see `LICENSE`, sections
+> 15 and 16).
+
 ![The Atari character set](docs/images/font_atascii_sheet.png)
 
 ## Features
@@ -387,7 +393,8 @@ any pixels, and were checked by eye.
 ## Licences
 
 - The editor's source code is licensed under the GNU General Public License,
-  version 3 or later (see `LICENSE`).
+  version 3 or later (see `LICENSE`). It comes with no warranty: see the
+  warning at the top of this file.
 - The character set is derived from the font "EightBit Atari", © 2018 Steve
   Boswell, used under the SIL Open Font License 1.1 (see
   `assets/fonts/atari/OFL.txt`).
